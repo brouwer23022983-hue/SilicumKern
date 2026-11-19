@@ -51,9 +51,10 @@
 4. **Stel populatie & mutatiekans in** (32 / 64 / 128 kernen en 2%–25% mutatiekans per byte).
 5. **Optionele hardware-uitbreidingen**:
    - **Zelf-modificatie (`PWRITE`)**: staat de VM toe zijn eigen actieve instructies te herschrijven. In het paneel *Live Machinetaal-Genoom* krijgen aangepaste regels direct een amberkleurig **`SMC`**-label.
-   - **Dual-Core Co-Processor Bus**: draait een tweede co-processor-kern (`Kern B`) vóór de primaire kern (`Kern A`) en verbindt beide via **`BUS0..BUS7`**.
+   - **Lamarckiaanse SMC-overerving**: schakelaar om runtime-`PWRITE`-aanpassingen terug te schrijven in het overerfbare genoom tussen generaties (uit = puur runtime *Baldwin-effect*).
+   - **Dual-Core Co-Processor Bus**: draait een co-processor-kern (`Kern B`) vóór de primaire kern (`Kern A`) en verbindt beide via **`BUS0..BUS7`**.
 6. **Trainen en inspecteren**:
-   - Klik rechtsboven op **Start evolutie** om generaties achter elkaar te laten evolueren, of gebruik **1 Generatie** voor losse stappen.
+   - Klik rechtsboven op **Start evolutie** om generaties achter elkaar te laten evolueren (elke generatie gemiddeld over 3 vaste anker-seeds + 1 roterende seed), of gebruik **1 Generatie** voor losse stappen.
    - Gebruik **Pauzeer live**, **Stap 1 Tick** en **Stap 1 Opcode** om elke register-, vlag-, RAM- en buswijziging per CPU-cyclus te volgen.
    - Klik in **Live Machinetaal-Genoom** op een willekeurige instructieregel om opcode, `Rd`/`Rs` of `#imm` direct handmatig te bewerken.
    - Test de veerkracht van een getrainde kern met **5. Hardware-storing injecteren** (*+24°C hittepiek*, *+35 werklastpiek* of *-25% spanningsdip*).
@@ -62,10 +63,15 @@
 ### 2. Instructieset
 Open het tabblad **Instructieset** voor een doorzoekbaar en filterbaar overzicht van alle **44 opcodes** (`0x00`..`0x2B`) met syntaxis en hardware-uitleg.
 
-### 3. Code-export (lokaal draaien zonder browser)
+### 3. Benchmark & Validatie
+Open het tabblad **Benchmark** voor twee gecontroleerde wetenschappelijke proeven:
+- **100-Seed Generalisatie-Benchmark**: test je geëvolueerde kern op 100 ongeziene testomgevingen (zonder evolutie) tegenover 16 willekeurige beginkernen.
+- **A/B-Test `PWRITE` AAN vs UIT**: start twee identieke beginpopulaties naast elkaar en vergelijkt beide op 50 ongeziene validatie-seeds.
+
+### 4. Code-export (lokaal draaien zonder browser)
 Open het tabblad **Code-export** om je geëvolueerde 128-byte kernel direct te kopiëren of downloaden in 4 formaten:
-- **C99 Kern**: losse C-functie + `main()` om direct te testen (`gcc -O3 -march=native ... -o micro_ai`).
-- **C99 Volledige Trainer**: zelfstandige evolutie-trainer inclusief VM in pure C99 (`gcc -O3 -march=native ... -o trainer`).
+- **C99 Kern**: losse C-functie + `main()` inclusief `active_code[]` (SMC) en `bus[8]` (`gcc -O3 -march=native ... -o micro_ai`).
+- **C99 Volledige Trainer**: zelfstandige 4-seed evolutie-trainer inclusief 44-opcode VM voor alle 3 taken (`homeostasis`, `arena`, `bitstream`) in pure C99 (`gcc -O3 -march=native ... -o trainer`).
 - **x86-64 + SSE2 NASM**: directe 64-bit x86 assembly met echte `r8..r15` en `xmm0..xmm3` instructies (`nasm -f elf64 ... -o micro_ai.o`).
 - **Ruwe Hex**: ruwe `uint8_t[128]` hex-dump voor embedded/no-std C, Rust of bootloaders.
 

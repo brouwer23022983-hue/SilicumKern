@@ -10,6 +10,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { ArenaCanvas } from './components/ArenaCanvas';
+import { BenchmarkView } from './components/BenchmarkView';
 import { CodeExportView, GITHUB_URL } from './components/CodeExportView';
 import { EvolutionChart, GenerationMetric } from './components/EvolutionChart';
 import { InstructionSetView } from './components/InstructionSetView';
@@ -38,7 +39,7 @@ import {
   stepSingleInstruction,
 } from './engine/machineVm';
 
-type ActiveView = 'workbench' | 'isa' | 'export';
+type ActiveView = 'workbench' | 'isa' | 'benchmark' | 'export';
 
 const STORAGE_KEY = 'siliciumkern_saved_state_v2';
 
@@ -46,6 +47,7 @@ interface SavedSession {
   taskId: TaskId;
   bitWidth: BitWidth;
   allowSmc?: boolean;
+  inheritSmc?: boolean;
   dualCore?: boolean;
   popSize: number;
   mutationRate: number;
@@ -104,6 +106,14 @@ function formatRegHex(val: string, bitWidth: BitWidth): string {
   return `0x${full}`;
 }
 
+function genomesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export default function App() {
   const initialSaved = useMemo(() => loadSavedSession(), []);
 
@@ -111,6 +121,7 @@ export default function App() {
   const [taskId, setTaskId] = useState<TaskId>(initialSaved?.taskId ?? 'homeostasis');
   const [bitWidth, setBitWidth] = useState<BitWidth>(initialSaved?.bitWidth ?? 64);
   const [allowSmc, setAllowSmc] = useState<boolean>(initialSaved?.allowSmc ?? true);
+  const [inheritSmc, setInheritSmc] = useState<boolean>(initialSaved?.inheritSmc ?? false);
   const [dualCore, setDualCore] = useState<boolean>(initialSaved?.dualCore ?? false);
   const [popSize, setPopSize] = useState<number>(initialSaved?.popSize ?? 64);
   const [mutationRate, setMutationRate] = useState<number>(initialSaved?.mutationRate ?? 0.08);
@@ -204,6 +215,9 @@ export default function App() {
   const allowSmcRef = useRef<boolean>(allowSmc);
   allowSmcRef.current = allowSmc;
 
+  const inheritSmcRef = useRef<boolean>(inheritSmc);
+  inheritSmcRef.current = inheritSmc;
+
   const dualCoreRef = useRef<boolean>(dualCore);
   dualCoreRef.current = dualCore;
 
@@ -238,7 +252,7 @@ export default function App() {
   const resetLivePreview = useCallback(
     (nextTask: TaskId, genomeOverride?: Uint8Array) => {
       const targetGenome = genomeOverride ?? bestGenomeRef.current;
-      const coGenome = populationRef.current[1]?.genome ?? targetGenome;
+      const coGenome = populationRef.current[0]?.genome ?? targetGenome;
       const freshEnv = createInitialEnv(nextTask, Math.floor(Date.now() % 100000) + 17);
       const freshVm = createVMState(targetGenome);
       const freshVmB = createVMState(coGenome);
@@ -286,8 +300,13 @@ export default function App() {
       generationRef.current,
       mutationRate,
       bitWidthRef.current,
-      { allowSmc: allowSmcRef.current, dualCore: dualCoreRef.current }
+      {
+        allowSmc: allowSmcRef.current,
+        inheritSmc: inheritSmcRef.current,
+        dualCore: dualCoreRef.current,
+      }
     );
+    const bestChanged = !genomesEqual(bestGenomeRef.current, res.bestAgent.genome);
     populationRef.current = res.nextPopulation;
     const nextGen = generationRef.current + 1;
     generationRef.current = nextGen;
@@ -309,7 +328,7 @@ export default function App() {
       return updated.length > 120 ? updated.slice(updated.length - 120) : updated;
     });
 
-    if (!envRef.current.alive) {
+    if (!envRef.current.alive || bestChanged) {
       resetLivePreview(taskId, res.bestAgent.genome);
     }
   }, [taskId, mutationRate, resetLivePreview]);
@@ -319,9 +338,9 @@ export default function App() {
       resetLivePreview(taskId);
       return;
     }
-    if (dualCoreRef.current && populationRef.current[1]) {
+    if (dualCoreRef.current) {
       runVMTick(
-        populationRef.current[1].genome,
+        populationRef.current[0]?.genome ?? bestGenomeRef.current,
         vmBRef.current,
         envRef.current.ports,
         bitWidthRef.current,
@@ -398,6 +417,7 @@ export default function App() {
           taskId,
           bitWidth,
           allowSmc,
+          inheritSmc,
           dualCore,
           popSize,
           mutationRate,
@@ -418,7 +438,7 @@ export default function App() {
       }
     }, 500);
     return () => window.clearTimeout(id);
-  }, [taskId, bitWidth, allowSmc, dualCore, popSize, mutationRate, fromScratch, generation, bestGenome, population, metrics]);
+  }, [taskId, bitWidth, allowSmc, inheritSmc, dualCore, popSize, mutationRate, fromScratch, generation, bestGenome, population, metrics]);
 
   const totalBytesPerAgent = 384;
   const totalPopulationKB = ((popSize * totalBytesPerAgent) / 1024).toFixed(1);
@@ -484,6 +504,7 @@ export default function App() {
             [
               ['workbench', 'Werkbank'],
               ['isa', 'Instructieset'],
+              ['benchmark', 'Benchmark'],
               ['export', 'Code-export'],
             ] as const
           ).map(([viewKey, label]) => (
@@ -690,6 +711,25 @@ export default function App() {
                   <span>Zelf-modificatie (PWRITE)</span>
                   <span className="font-mono font-semibold">{allowSmc ? 'AAN' : 'UIT'}</span>
                 </button>
+
+                {allowSmc && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !inheritSmc;
+                      setInheritSmc(next);
+                      inheritSmcRef.current = next;
+                    }}
+                    className={`w-full flex items-center justify-between px-3 py-2 rounded-md border text-xs transition-colors ${
+                      inheritSmc
+                        ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+                        : 'bg-[#0B0F19] border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <span>Lamarckiaanse SMC-overerving</span>
+                    <span className="font-mono font-semibold">{inheritSmc ? 'AAN' : 'UIT'}</span>
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -1169,6 +1209,22 @@ export default function App() {
       {activeView === 'isa' && (
         <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
           <InstructionSetView taskId={taskId} bitWidth={bitWidth} />
+        </main>
+      )}
+
+      {activeView === 'benchmark' && (
+        <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
+          <BenchmarkView
+            genome={bestGenome}
+            coGenome={population[0]?.genome ?? null}
+            taskId={taskId}
+            bitWidth={bitWidth}
+            generation={generation}
+            allowSmc={allowSmc}
+            inheritSmc={inheritSmc}
+            dualCore={dualCore}
+            mutationRate={mutationRate}
+          />
         </main>
       )}
 

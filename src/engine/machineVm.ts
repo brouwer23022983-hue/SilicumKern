@@ -1013,14 +1013,16 @@ export function stepEnvironment(
   updateEnvPorts(env);
 }
 
-export function evaluateAgent(
+const BENCHMARK_ANCHOR_SEEDS = [1013, 2029, 3049];
+
+export function evaluateAgentDetailed(
   genome: Uint8Array,
   taskId: TaskId,
   seed: number,
   bitWidth: BitWidth = 32,
   ticks: number = 36,
   options: { allowSmc?: boolean; coGenome?: Uint8Array | null } = {}
-): number {
+): { score: number; modifiedCode: Uint8Array; smcModifiedCount: number; alive: boolean } {
   const env = createInitialEnv(taskId, seed);
   const vmA = createVMState(genome);
   const vmB = options.coGenome ? createVMState(options.coGenome) : null;
@@ -1041,7 +1043,29 @@ export function evaluateAgent(
     });
     stepEnvironment(env, action, didAct, rng);
   }
-  return env.cumulativeScore;
+
+  let smcModifiedCount = 0;
+  for (let i = 0; i < PROG_LEN; i++) {
+    if (vmA.smcModified[i]) smcModifiedCount++;
+  }
+
+  return {
+    score: env.cumulativeScore,
+    modifiedCode: vmA.activeCode,
+    smcModifiedCount,
+    alive: env.alive,
+  };
+}
+
+export function evaluateAgent(
+  genome: Uint8Array,
+  taskId: TaskId,
+  seed: number,
+  bitWidth: BitWidth = 32,
+  ticks: number = 36,
+  options: { allowSmc?: boolean; coGenome?: Uint8Array | null } = {}
+): number {
+  return evaluateAgentDetailed(genome, taskId, seed, bitWidth, ticks, options).score;
 }
 
 export function mutateGenome(
@@ -1092,7 +1116,7 @@ export function evolveGeneration(
   generation: number,
   mutationRate: number,
   bitWidth: BitWidth = 32,
-  options: { allowSmc?: boolean; dualCore?: boolean } = {}
+  options: { allowSmc?: boolean; inheritSmc?: boolean; dualCore?: boolean } = {}
 ): {
   nextPopulation: Agent[];
   bestFitness: number;
@@ -1100,18 +1124,38 @@ export function evolveGeneration(
   bestAgent: Agent;
   coAgent: Agent | null;
 } {
-  const seed =
-    (generation + 1) * 997 + (taskId === 'homeostasis' ? 11 : taskId === 'arena' ? 29 : 53);
-  const rng = createRng(seed * 31 + 7);
-  const coGenome = options.dualCore && population.length > 1 ? population[1].genome : null;
+  const taskOffset = taskId === 'homeostasis' ? 11 : taskId === 'arena' ? 29 : 53;
+  const rotatingSeed = (generation + 1) * 997 + taskOffset;
+  const evalSeeds = [...BENCHMARK_ANCHOR_SEEDS, rotatingSeed];
+  const rng = createRng(rotatingSeed * 31 + 7);
+
+  // Symmetrical Dual-Core: frozen previous-generation elite acts as identical co-processor for every agent
+  const symmetricCoGenome =
+    options.dualCore && population.length > 0 ? new Uint8Array(population[0].genome) : null;
 
   let sum = 0;
   for (let i = 0; i < population.length; i++) {
     const agent = population[i];
-    agent.fitness = evaluateAgent(agent.genome, taskId, seed, bitWidth, 36, {
-      allowSmc: options.allowSmc,
-      coGenome: options.dualCore ? (i === 1 ? population[0].genome : coGenome) : null,
-    });
+    let totalScore = 0;
+    let lastModifiedCode: Uint8Array | null = null;
+    let lastSmcCount = 0;
+
+    for (let s = 0; s < evalSeeds.length; s++) {
+      const res = evaluateAgentDetailed(agent.genome, taskId, evalSeeds[s] + taskOffset, bitWidth, 36, {
+        allowSmc: options.allowSmc,
+        coGenome: symmetricCoGenome,
+      });
+      totalScore += res.score;
+      if (s === evalSeeds.length - 1) {
+        lastModifiedCode = res.modifiedCode;
+        lastSmcCount = res.smcModifiedCount;
+      }
+    }
+
+    agent.fitness = totalScore / evalSeeds.length;
+    if (options.allowSmc && options.inheritSmc && lastModifiedCode && lastSmcCount > 0) {
+      agent.genome = new Uint8Array(lastModifiedCode);
+    }
     sum += agent.fitness;
   }
 
@@ -1156,6 +1200,149 @@ export function evolveGeneration(
   };
 }
 
+export interface GeneralizationResult {
+  seedsTested: number;
+  agentMean: number;
+  agentMin: number;
+  agentMax: number;
+  agentSurvivalRate: number;
+  randomMean: number;
+  delta: number;
+  smcActiveSeeds: number;
+  agentScores: number[];
+  randomScores: number[];
+}
+
+export function runGeneralizationBenchmark(
+  genome: Uint8Array,
+  taskId: TaskId,
+  bitWidth: BitWidth,
+  allowSmc: boolean,
+  coGenome: Uint8Array | null = null,
+  seedsTested: number = 100
+): GeneralizationResult {
+  const agentScores: number[] = [];
+  const randomScores: number[] = [];
+  const rng = createRng(88421);
+  const randomPool = Array.from({ length: 16 }, () => createRandomGenome(rng, bitWidth));
+
+  let agentSum = 0;
+  let agentMin = Infinity;
+  let agentMax = -Infinity;
+  let survived = 0;
+  let smcActiveSeeds = 0;
+  let randomSum = 0;
+
+  for (let i = 0; i < seedsTested; i++) {
+    const seed = 50001 + i * 37;
+    const res = evaluateAgentDetailed(genome, taskId, seed, bitWidth, 36, {
+      allowSmc,
+      coGenome,
+    });
+    agentScores.push(res.score);
+    agentSum += res.score;
+    if (res.score < agentMin) agentMin = res.score;
+    if (res.score > agentMax) agentMax = res.score;
+    if (res.alive) survived++;
+    if (res.smcModifiedCount > 0) smcActiveSeeds++;
+
+    const rGenome = randomPool[i % randomPool.length];
+    const rScore = evaluateAgent(rGenome, taskId, seed, bitWidth, 36, { allowSmc });
+    randomScores.push(rScore);
+    randomSum += rScore;
+  }
+
+  const agentMean = agentSum / seedsTested;
+  const randomMean = randomSum / seedsTested;
+
+  return {
+    seedsTested,
+    agentMean,
+    agentMin,
+    agentMax,
+    agentSurvivalRate: (survived / seedsTested) * 100,
+    randomMean,
+    delta: agentMean - randomMean,
+    smcActiveSeeds,
+    agentScores,
+    randomScores,
+  };
+}
+
+export interface SmcAbResult {
+  generations: number;
+  smcSeries: Array<{ generation: number; best: number; mean: number }>;
+  noSmcSeries: Array<{ generation: number; best: number; mean: number }>;
+  smcValidationMean: number;
+  noSmcValidationMean: number;
+  smcModifiedOpcodes: number;
+}
+
+export function runSmcAbExperiment(
+  taskId: TaskId,
+  bitWidth: BitWidth,
+  popSize: number = 48,
+  generations: number = 40,
+  mutationRate: number = 0.08,
+  inheritSmc: boolean = false
+): SmcAbResult {
+  const rng = createRng(91237);
+  const initial: Agent[] = Array.from({ length: popSize }, (_, i) => ({
+    id: i,
+    genome: createRandomGenome(rng, bitWidth),
+    fitness: 0,
+    generationBorn: 0,
+  }));
+
+  let popSmc: Agent[] = initial.map((a) => ({ ...a, genome: new Uint8Array(a.genome) }));
+  let popNoSmc: Agent[] = initial.map((a) => ({ ...a, genome: new Uint8Array(a.genome) }));
+
+  const smcSeries: Array<{ generation: number; best: number; mean: number }> = [];
+  const noSmcSeries: Array<{ generation: number; best: number; mean: number }> = [];
+
+  let bestSmc: Uint8Array = popSmc[0].genome;
+  let bestNoSmc: Uint8Array = popNoSmc[0].genome;
+
+  for (let g = 0; g < generations; g++) {
+    const rSmc = evolveGeneration(popSmc, taskId, g, mutationRate, bitWidth, {
+      allowSmc: true,
+      inheritSmc,
+    });
+    popSmc = rSmc.nextPopulation;
+    bestSmc = rSmc.bestAgent.genome;
+    smcSeries.push({ generation: g + 1, best: rSmc.bestFitness, mean: rSmc.meanFitness });
+
+    const rNo = evolveGeneration(popNoSmc, taskId, g, mutationRate, bitWidth, {
+      allowSmc: false,
+      inheritSmc: false,
+    });
+    popNoSmc = rNo.nextPopulation;
+    bestNoSmc = rNo.bestAgent.genome;
+    noSmcSeries.push({ generation: g + 1, best: rNo.bestFitness, mean: rNo.meanFitness });
+  }
+
+  let valSmc = 0;
+  let valNoSmc = 0;
+  let totalModified = 0;
+  const valSeeds = 50;
+  for (let i = 0; i < valSeeds; i++) {
+    const seed = 70001 + i * 41;
+    const dSmc = evaluateAgentDetailed(bestSmc, taskId, seed, bitWidth, 36, { allowSmc: true });
+    valSmc += dSmc.score;
+    totalModified += dSmc.smcModifiedCount;
+    valNoSmc += evaluateAgent(bestNoSmc, taskId, seed, bitWidth, 36, { allowSmc: false });
+  }
+
+  return {
+    generations,
+    smcSeries,
+    noSmcSeries,
+    smcValidationMean: valSmc / valSeeds,
+    noSmcValidationMean: valNoSmc / valSeeds,
+    smcModifiedOpcodes: Math.round((totalModified / valSeeds) * 10) / 10,
+  };
+}
+
 // ==========================================
 // NATIVE CODE GENERATORS (C99 / x86-64 / HEX)
 // ==========================================
@@ -1181,11 +1368,12 @@ export function generateC99Code(
 
   return `/* SiliciumKern — Multi-Breedte (${bitWidth}-bit) Machinetaal Autonome AI (C99)
  * Taakprofiel: ${TASKS[taskId].name}
- * Scalar breedte: ${sw}-bit (${cType}) + 4x 128-bit SIMD XMM-vectoren (4 x int32_t lanes)
+ * Scalar breedte: ${sw}-bit (${cType}) + 4x 128-bit SIMD XMM-vectoren + SMC (PREAD/PWRITE) + Shared Bus
  * Compileer lokaal (0 dependencies): gcc -O3 -march=native micro_ai.c -o micro_ai
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #define PROG_LEN 32
 #define RAM_WORDS 16
@@ -1196,6 +1384,9 @@ typedef struct {
     ${cType} regs[8];
     int32_t xmm[4][4]; /* 128-bit SIMD vector registers XMM0..XMM3 */
     ${cType} ram[RAM_WORDS];
+    uint8_t active_code[PROG_LEN * 4];
+    int32_t bus[8];
+    uint8_t code_ready;
     uint8_t ip, zf, cf, sf;
     int32_t out;
 } SiliciumVM;
@@ -1203,6 +1394,11 @@ typedef struct {
 static const uint8_t GENOME[PROG_LEN * 4] = {
 ${hexLines.join('\n')}
 };
+
+static inline void silicium_init(SiliciumVM *vm) {
+    memcpy(vm->active_code, GENOME, sizeof(GENOME));
+    vm->code_ready = 1;
+}
 
 static inline ${cType} popcnt_fn(${uType} v) {
     ${cType} c = 0;
@@ -1220,13 +1416,14 @@ static inline ${cType} bswap_fn(${uType} v) {
 }
 
 int32_t silicium_tick(SiliciumVM *vm, const int32_t ports[6]) {
+    if (!vm->code_ready) silicium_init(vm);
     vm->ip = 0;
     for (int cycle = 0; cycle < MAX_CYCLES; cycle++) {
         uint8_t idx = vm->ip % PROG_LEN;
-        uint8_t op  = GENOME[idx * 4 + 0] % ${OPCODE_COUNT};
-        uint8_t dst = GENOME[idx * 4 + 1] & 7;
-        uint8_t src = GENOME[idx * 4 + 2] & 7;
-        int8_t  imm = (int8_t)GENOME[idx * 4 + 3];
+        uint8_t op  = vm->active_code[idx * 4 + 0] % ${OPCODE_COUNT};
+        uint8_t dst = vm->active_code[idx * 4 + 1] & 7;
+        uint8_t src = vm->active_code[idx * 4 + 2] & 7;
+        int8_t  imm = (int8_t)vm->active_code[idx * 4 + 3];
         uint8_t jumped = 0;
 
         switch (op) {
@@ -1299,13 +1496,21 @@ int32_t silicium_tick(SiliciumVM *vm, const int32_t ports[6]) {
             case 0x27: vm->out = (int32_t)vm->regs[src]; return vm->out;
             case 0x28: {
                 uint8_t p = (uint8_t)(vm->regs[src] & (PROG_LEN - 1));
-                uint32_t w = (uint32_t)GENOME[p*4] | ((uint32_t)GENOME[p*4+1]<<8) | ((uint32_t)GENOME[p*4+2]<<16) | ((uint32_t)GENOME[p*4+3]<<24);
+                uint32_t w = (uint32_t)vm->active_code[p*4] | ((uint32_t)vm->active_code[p*4+1]<<8) | ((uint32_t)vm->active_code[p*4+2]<<16) | ((uint32_t)vm->active_code[p*4+3]<<24);
                 vm->regs[dst] = (${cType})((int32_t)w);
                 break;
             }
-            case 0x29: break; /* PWRITE (SMC runtime op) */
-            case 0x2A: break; /* BWRITE (Dual-core shared bus) */
-            case 0x2B: vm->regs[dst] = 0; break; /* BREAD */
+            case 0x29: {
+                uint8_t p = (uint8_t)(vm->regs[dst] & (PROG_LEN - 1));
+                uint32_t w = (uint32_t)((int32_t)vm->regs[src]);
+                vm->active_code[p*4 + 0] = (uint8_t)((w & 0xFFu) % ${OPCODE_COUNT});
+                vm->active_code[p*4 + 1] = (uint8_t)(((w >> 8) & 0xFFu) & 7u);
+                vm->active_code[p*4 + 2] = (uint8_t)(((w >> 16) & 0xFFu) & 7u);
+                vm->active_code[p*4 + 3] = (uint8_t)((w >> 24) & 0xFFu);
+                break;
+            }
+            case 0x2A: vm->bus[vm->regs[dst] & 7] = (int32_t)vm->regs[src]; break;
+            case 0x2B: vm->regs[dst] = (${cType})vm->bus[vm->regs[src] & 7]; break;
         }
         if (!jumped) vm->ip = (idx + 1) % PROG_LEN;
     }
@@ -1314,6 +1519,7 @@ int32_t silicium_tick(SiliciumVM *vm, const int32_t ports[6]) {
 
 int main(void) {
     SiliciumVM vm = {0};
+    silicium_init(&vm);
     int32_t sample_ports[6] = {64, 48, 70, 9, 8, 1};
     int32_t action = silicium_tick(&vm, sample_ports);
     printf("SiliciumKern (${bitWidth}-bit) ACT output: %d\\n", action);
@@ -1536,11 +1742,111 @@ export function generateStandaloneTrainerC99(
     .map((b) => `0x${b.toString(16).padStart(2, '0')}`)
     .join(', ');
 
+  const evalFnC =
+    taskId === 'arena'
+      ? `static double eval_task(const uint8_t *g, uint32_t seed) {
+    rng_state = seed ? seed : 1;
+    SiliciumVM vm = {0};
+    memcpy(vm.active_code, g, PROG_LEN * 4);
+    int nx[4], ny[4], hx[5], hy[5];
+    for (int i = 0; i < 4; i++) { nx[i] = (int)(xorshift32() & 15); ny[i] = (int)(xorshift32() & 15); }
+    for (int i = 0; i < 5; i++) { hx[i] = (int)(xorshift32() & 15); hy[i] = (int)(xorshift32() & 15); }
+    int ax = 8, ay = 8;
+    double energy = 82.0, score = 0.0;
+
+    for (int t = 0; t < TICKS; t++) {
+        int bnd = 999, bx = nx[0], by = ny[0], bhd = 999, bhx = hx[0], bhy = hy[0];
+        for (int i = 0; i < 4; i++) { int d = (ax>nx[i]?ax-nx[i]:nx[i]-ax)+(ay>ny[i]?ay-ny[i]:ny[i]-ay); if (d<bnd) { bnd=d; bx=nx[i]; by=ny[i]; } }
+        for (int i = 0; i < 5; i++) { int d = (ax>hx[i]?ax-hx[i]:hx[i]-ax)+(ay>hy[i]?ay-hy[i]:hy[i]-ay); if (d<bhd) { bhd=d; bhx=hx[i]; bhy=hy[i]; } }
+        int32_t ports[6] = {bx - ax, by - ay, bhx - ax, bhy - ay, (int32_t)energy, bnd};
+        int acted = 0;
+        int32_t raw = vm_tick(&vm, ports, &acted);
+        int act = ((raw % 4) + 4) % 4;
+        score += acted ? 0.5 : -2.0;
+
+        if (act == 0) ay--; else if (act == 1) ax++; else if (act == 2) ay++; else ax--;
+        if (ax < 0) { ax = 0; score -= 3.5; } else if (ax > 15) { ax = 15; score -= 3.5; }
+        if (ay < 0) { ay = 0; score -= 3.5; } else if (ay > 15) { ay = 15; score -= 3.5; }
+        energy -= 1.2;
+
+        int newd = 999;
+        for (int i = 0; i < 4; i++) {
+            if (nx[i] == ax && ny[i] == ay) {
+                score += 30.0; energy = energy + 25.0 > 100.0 ? 100.0 : energy + 25.0;
+                nx[i] = (int)(xorshift32() & 15); ny[i] = (int)(xorshift32() & 15);
+            }
+            int d = (ax>nx[i]?ax-nx[i]:nx[i]-ax)+(ay>ny[i]?ay-ny[i]:ny[i]-ay);
+            if (d < newd) newd = d;
+        }
+        score += (bnd - newd) * 2.5;
+        for (int i = 0; i < 5; i++) if (hx[i] == ax && hy[i] == ay) { energy -= 22.0; score -= 18.0; }
+        if (energy <= 0.0) { score -= 25.0; break; }
+    }
+    return score;
+}`
+      : taskId === 'bitstream'
+        ? `static double eval_task(const uint8_t *g, uint32_t seed) {
+    rng_state = seed ? seed : 1;
+    SiliciumVM vm = {0};
+    memcpy(vm.active_code, g, PROG_LEN * 4);
+    int cur = (int)(xorshift32() & 15), prev = (int)(xorshift32() & 15), pred = 0;
+    double score = 0.0;
+
+    for (int t = 0; t < TICKS; t++) {
+        int target = (cur ^ prev) & 15;
+        int32_t ports[6] = {cur, prev, t & 1, target, (target>pred?target-pred:pred-target), pred};
+        int acted = 0;
+        int32_t raw = vm_tick(&vm, ports, &acted);
+        pred = raw & 15;
+        score += acted ? 0.5 : -2.0;
+        int x = pred ^ target, err = 0;
+        while (x) { err += (x & 1); x >>= 1; }
+        score += (4 - err) * 4.0 + (pred == target ? 10.0 : 0.0);
+        prev = cur;
+        cur = (int)(xorshift32() & 15);
+    }
+    return score;
+}`
+        : `static double eval_task(const uint8_t *g, uint32_t seed) {
+    rng_state = seed ? seed : 1;
+    SiliciumVM vm = {0};
+    memcpy(vm.active_code, g, PROG_LEN * 4);
+    double temp = 48.0, queue = 32.0, energy = 82.0, score = 0.0;
+    int32_t last_act = 1;
+
+    for (int t = 0; t < TICKS; t++) {
+        int32_t ports[6] = {(int32_t)temp, (int32_t)queue, (int32_t)energy,
+                            (int32_t)(temp - 55.0), (int32_t)(queue - 40.0), last_act};
+        int acted = 0;
+        int32_t raw = vm_tick(&vm, ports, &acted);
+        int act = ((raw % 4) + 4) % 4;
+        last_act = act;
+        score += acted ? 0.5 : -2.0;
+
+        int load = 3 + (int)(xorshift32() % 5) + (t % 13 == 0 ? 12 : 0);
+        if (act == 0)      { temp -= 5.0; energy += 8.0; queue += load; }
+        else if (act == 1) { temp += 1.5; energy -= 2.5; queue += load - 7; }
+        else if (act == 2) { temp += 6.5; energy -= 7.0; queue += load - 16; }
+        else               { temp -= 10.0; energy -= 4.0; queue += load - 2; }
+
+        temp += (32.0 - temp) * 0.04;
+        if (temp < 15.0) temp = 15.0; if (temp > 105.0) temp = 105.0;
+        if (queue < 0.0) queue = 0.0; if (queue > 100.0) queue = 100.0;
+        if (energy < 0.0) energy = 0.0; if (energy > 100.0) energy = 100.0;
+
+        if (temp >= 98.0 || energy <= 2.0) { score -= 40.0; break; }
+        double ts = 12.0 - ((temp > 52.0 ? temp - 52.0 : 52.0 - temp) * 0.45);
+        double qs = 10.0 - queue * 0.22;
+        score += (ts > 0 ? ts : 0) + (qs > 0 ? qs : 0) + (energy > 25.0 ? 6.0 : -6.0);
+    }
+    return score;
+}`;
+
   return `/* SiliciumKern — Volledige Losse C99 Evolutie-Trainer + VM (${bitWidth}-bit)
  * Taakprofiel: ${TASKS[taskId].name}
- * Bevat alle 44 opcodes (16/32/64-bit + 128-bit SIMD vector-lanes XMM0..XMM3 + SMC/Bus).
- * Compileer met maximale CPU-optimalisatie:
- *   gcc -O3 -march=native silicium_trainer.c -o silicium_trainer && ./silicium_trainer
+ * Bevat alle 44 opcodes (16/32/64-bit + 128-bit SIMD XMM0..XMM3 + SMC PREAD/PWRITE + Bus)
+ * Evalueert met 3 vaste anker-seeds + 1 roterende seed per generatie.
+ * Compileer: gcc -O3 -march=native silicium_trainer.c -o silicium_trainer && ./silicium_trainer
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -1550,7 +1856,7 @@ export function generateStandaloneTrainerC99(
 #define RAM_WORDS  16
 #define MAX_CYCLES 24
 #define POP_SIZE   64
-#define TICKS      40
+#define TICKS      36
 #define GENS       200
 #define SCALAR_BITS ${sw}
 
@@ -1558,6 +1864,8 @@ typedef struct {
     ${cType} regs[8];
     int32_t xmm[4][4];
     ${cType} ram[RAM_WORDS];
+    uint8_t active_code[PROG_LEN * 4];
+    int32_t bus[8];
     uint8_t ip, zf, cf;
     int32_t out;
 } SiliciumVM;
@@ -1580,15 +1888,15 @@ static const uint8_t SEED_GENOME[PROG_LEN * 4] = {
     ${hexBytes}
 };
 
-static int32_t vm_tick(const uint8_t *g, SiliciumVM *vm, const int32_t ports[6], int *acted) {
+static int32_t vm_tick(SiliciumVM *vm, const int32_t ports[6], int *acted) {
     vm->ip = 0;
     *acted = 0;
     for (int c = 0; c < MAX_CYCLES; c++) {
         uint8_t idx = vm->ip % PROG_LEN;
-        uint8_t op  = g[idx * 4 + 0] % ${OPCODE_COUNT};
-        uint8_t dst = g[idx * 4 + 1] & 7;
-        uint8_t src = g[idx * 4 + 2] & 7;
-        int8_t  imm = (int8_t)g[idx * 4 + 3];
+        uint8_t op  = vm->active_code[idx * 4 + 0] % ${OPCODE_COUNT};
+        uint8_t dst = vm->active_code[idx * 4 + 1] & 7;
+        uint8_t src = vm->active_code[idx * 4 + 2] & 7;
+        int8_t  imm = (int8_t)vm->active_code[idx * 4 + 3];
         uint8_t jumped = 0;
 
         switch (op) {
@@ -1656,7 +1964,23 @@ static int32_t vm_tick(const uint8_t *g, SiliciumVM *vm, const int32_t ports[6],
             case 0x25: { ${cType} s=0; for (int l=0;l<4;l++) s += (${cType})vm->xmm[src&3][l]; vm->regs[dst]=s; break; }
             case 0x26: vm->regs[dst] = (${cType})ports[src % 6]; break;
             case 0x27: vm->out = (int32_t)vm->regs[src]; *acted = 1; return vm->out;
-            default: break;
+            case 0x28: {
+                uint8_t p = (uint8_t)(vm->regs[src] & (PROG_LEN - 1));
+                uint32_t w = (uint32_t)vm->active_code[p*4] | ((uint32_t)vm->active_code[p*4+1]<<8) | ((uint32_t)vm->active_code[p*4+2]<<16) | ((uint32_t)vm->active_code[p*4+3]<<24);
+                vm->regs[dst] = (${cType})((int32_t)w);
+                break;
+            }
+            case 0x29: {
+                uint8_t p = (uint8_t)(vm->regs[dst] & (PROG_LEN - 1));
+                uint32_t w = (uint32_t)((int32_t)vm->regs[src]);
+                vm->active_code[p*4 + 0] = (uint8_t)((w & 0xFFu) % ${OPCODE_COUNT});
+                vm->active_code[p*4 + 1] = (uint8_t)(((w >> 8) & 0xFFu) & 7u);
+                vm->active_code[p*4 + 2] = (uint8_t)(((w >> 16) & 0xFFu) & 7u);
+                vm->active_code[p*4 + 3] = (uint8_t)((w >> 24) & 0xFFu);
+                break;
+            }
+            case 0x2A: vm->bus[vm->regs[dst] & 7] = (int32_t)vm->regs[src]; break;
+            case 0x2B: vm->regs[dst] = (${cType})vm->bus[vm->regs[src] & 7]; break;
         }
         if (!jumped) vm->ip = (idx + 1) % PROG_LEN;
     }
@@ -1664,43 +1988,12 @@ static int32_t vm_tick(const uint8_t *g, SiliciumVM *vm, const int32_t ports[6],
     return vm->out;
 }
 
-static double eval_homeostasis(const uint8_t *g, uint32_t seed) {
-    rng_state = seed ? seed : 1;
-    SiliciumVM vm = {0};
-    double temp = 48.0, queue = 32.0, energy = 82.0, score = 0.0;
-    int32_t last_act = 1;
-
-    for (int t = 0; t < TICKS; t++) {
-        int32_t ports[6] = {(int32_t)temp, (int32_t)queue, (int32_t)energy,
-                            (int32_t)(temp - 55.0), (int32_t)(queue - 40.0), last_act};
-        int acted = 0;
-        int32_t raw = vm_tick(g, &vm, ports, &acted);
-        int act = ((raw % 4) + 4) % 4;
-        last_act = act;
-        score += acted ? 0.5 : -2.0;
-
-        int load = 3 + (int)(xorshift32() % 5) + (t % 13 == 0 ? 12 : 0);
-        if (act == 0)      { temp -= 5.0; energy += 8.0; queue += load; }
-        else if (act == 1) { temp += 1.5; energy -= 2.5; queue += load - 7; }
-        else if (act == 2) { temp += 6.5; energy -= 7.0; queue += load - 16; }
-        else               { temp -= 10.0; energy -= 4.0; queue += load - 2; }
-
-        temp += (32.0 - temp) * 0.04;
-        if (temp < 15.0) temp = 15.0; if (temp > 105.0) temp = 105.0;
-        if (queue < 0.0) queue = 0.0; if (queue > 100.0) queue = 100.0;
-        if (energy < 0.0) energy = 0.0; if (energy > 100.0) energy = 100.0;
-
-        if (temp >= 98.0 || energy <= 2.0) { score -= 40.0; break; }
-        double ts = 12.0 - ((temp > 52.0 ? temp - 52.0 : 52.0 - temp) * 0.45);
-        double qs = 10.0 - queue * 0.22;
-        score += (ts > 0 ? ts : 0) + (qs > 0 ? qs : 0) + (energy > 25.0 ? 6.0 : -6.0);
-    }
-    return score;
-}
+${evalFnC}
 
 int main(void) {
     Agent pop[POP_SIZE];
     Agent next_pop[POP_SIZE];
+    static const uint32_t ANCHORS[3] = {1013u, 2029u, 3049u};
     memcpy(pop[0].genome, SEED_GENOME, PROG_LEN * 4);
     for (int i = 1; i < POP_SIZE; i++) {
         memcpy(pop[i].genome, SEED_GENOME, PROG_LEN * 4);
@@ -1710,14 +2003,18 @@ int main(void) {
     }
 
     for (int gen = 1; gen <= GENS; gen++) {
-        uint32_t eval_seed = (uint32_t)(gen * 997 + 11);
-        for (int i = 0; i < POP_SIZE; i++) pop[i].fitness = eval_homeostasis(pop[i].genome, eval_seed);
+        uint32_t rot_seed = (uint32_t)(gen * 997 + 11);
+        for (int i = 0; i < POP_SIZE; i++) {
+            double total = eval_task(pop[i].genome, rot_seed);
+            for (int a = 0; a < 3; a++) total += eval_task(pop[i].genome, ANCHORS[a]);
+            pop[i].fitness = total / 4.0;
+        }
         for (int i = 0; i < POP_SIZE - 1; i++) {
             for (int j = i + 1; j < POP_SIZE; j++) {
                 if (pop[j].fitness > pop[i].fitness) { Agent tmp = pop[i]; pop[i] = pop[j]; pop[j] = tmp; }
             }
         }
-        if (gen == 1 || gen % 20 == 0 || gen == GENS) printf("Gen %3d | Beste fitness: %7.2f\\n", gen, pop[0].fitness);
+        if (gen == 1 || gen % 20 == 0 || gen == GENS) printf("Gen %3d | Beste fitness (4-seed gem): %7.2f\\n", gen, pop[0].fitness);
         int elite = POP_SIZE / 8;
         for (int i = 0; i < elite; i++) next_pop[i] = pop[i];
         int pool = POP_SIZE / 3;
