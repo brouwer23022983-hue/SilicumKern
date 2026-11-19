@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Check, Copy, Download, RefreshCw } from 'lucide-react';
+import { Check, Copy, Download } from 'lucide-react';
 import {
   BitWidth,
   TaskId,
@@ -12,24 +12,11 @@ import {
 export const GITHUB_REPO = 'brouwer23022983-hue/SilicumKern';
 export const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
 
-export interface UpdateCheckState {
-  status: 'idle' | 'checking' | 'up-to-date' | 'update-available' | 'error';
-  remoteBuildId?: string;
-  githubCommitSha?: string;
-  githubCommitMessage?: string;
-  githubCommitUrl?: string;
-  githubAhead?: boolean;
-  openPullRequests?: number;
-}
-
 interface CodeExportViewProps {
   genome: Uint8Array;
   taskId: TaskId;
   bitWidth: BitWidth;
   generation: number;
-  updateState: UpdateCheckState;
-  onCheckUpdate: () => void;
-  onApplyUpdate: () => void;
 }
 
 type ExportFormat = 'c99' | 'trainer' | 'nasm' | 'hex';
@@ -39,9 +26,6 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
   taskId,
   bitWidth,
   generation,
-  updateState,
-  onCheckUpdate,
-  onApplyUpdate,
 }) => {
   const [format, setFormat] = useState<ExportFormat>('c99');
   const [copied, setCopied] = useState(false);
@@ -155,58 +139,14 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
           </code>
         </span>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <a
-            href={updateState.githubCommitUrl ?? GITHUB_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs font-mono text-slate-400 hover:text-cyan-300 underline decoration-slate-700 underline-offset-4 transition-colors whitespace-nowrap"
-          >
-            {updateState.githubCommitSha
-              ? `GitHub · ${updateState.githubCommitSha}${updateState.githubAhead ? ' (nieuwer op GitHub)' : ''}`
-              : `GitHub · ${GITHUB_REPO}`}
-          </a>
-
-          {updateState.openPullRequests && updateState.openPullRequests > 0 ? (
-            <a
-              href={`${GITHUB_URL}/pulls`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-xs font-mono text-amber-300 hover:text-amber-200 underline decoration-amber-500/40 underline-offset-4 whitespace-nowrap"
-            >
-              {updateState.openPullRequests} open PR
-            </a>
-          ) : null}
-
-          {updateState.status === 'update-available' ? (
-            <button
-              type="button"
-              onClick={onApplyUpdate}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-md transition-colors whitespace-nowrap"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-              Nieuwe build klaar — klik om bij te werken
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onCheckUpdate}
-              disabled={updateState.status === 'checking'}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-slate-200 rounded-md transition-colors whitespace-nowrap"
-            >
-              <RefreshCw
-                className={`w-3.5 h-3.5 ${updateState.status === 'checking' ? 'animate-spin' : ''}`}
-              />
-              {updateState.status === 'checking'
-                ? 'Controleren...'
-                : updateState.status === 'up-to-date'
-                  ? 'Actueel (klik nogmaals om te checken)'
-                  : updateState.status === 'error'
-                    ? 'Check mislukt — probeer opnieuw'
-                    : 'Controleer op updates'}
-            </button>
-          )}
-        </div>
+        <a
+          href={GITHUB_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-xs font-mono text-slate-400 hover:text-cyan-300 underline decoration-slate-700 underline-offset-4 transition-colors whitespace-nowrap"
+        >
+          GitHub · {GITHUB_REPO}
+        </a>
       </div>
 
       <pre className="flex-1 p-5 overflow-auto text-xs font-mono leading-relaxed text-slate-200 bg-[#080B12]">

@@ -4,19 +4,13 @@ import {
   Flame,
   Pause,
   Play,
-  RefreshCw,
   RotateCcw,
   SkipForward,
   StepForward,
   Zap,
 } from 'lucide-react';
 import { ArenaCanvas } from './components/ArenaCanvas';
-import {
-  CodeExportView,
-  GITHUB_REPO,
-  GITHUB_URL,
-  UpdateCheckState,
-} from './components/CodeExportView';
+import { CodeExportView, GITHUB_URL } from './components/CodeExportView';
 import { EvolutionChart, GenerationMetric } from './components/EvolutionChart';
 import { InstructionSetView } from './components/InstructionSetView';
 import {
@@ -126,7 +120,6 @@ export default function App() {
   const [isEvolving, setIsEvolving] = useState<boolean>(false);
   const [isSimRunning, setIsSimRunning] = useState<boolean>(true);
   const [metrics, setMetrics] = useState<GenerationMetric[]>(initialSaved?.metrics ?? []);
-  const [updateState, setUpdateState] = useState<UpdateCheckState>({ status: 'idle' });
 
   const [population, setPopulation] = useState<Agent[]>(() => {
     if (initialSaved && Array.isArray(initialSaved.population) && initialSaved.population.length > 0) {
@@ -426,93 +419,6 @@ export default function App() {
     }, 500);
     return () => window.clearTimeout(id);
   }, [taskId, bitWidth, allowSmc, dualCore, popSize, mutationRate, fromScratch, generation, bestGenome, population, metrics]);
-
-  const checkForUpdates = useCallback(async (includeGitHub = true) => {
-    setUpdateState((prev) => ({ ...prev, status: 'checking' }));
-    try {
-      const hostRes = await fetch(`./version.json?t=${Date.now()}`, { cache: 'no-store' });
-      if (!hostRes.ok) throw new Error('Update check failed');
-      const hostData = (await hostRes.json()) as { buildId?: string };
-
-      let githubCommitSha: string | undefined;
-      let githubCommitMessage: string | undefined;
-      let githubCommitUrl: string | undefined;
-      let githubAhead = false;
-      let openPullRequests: number | undefined;
-
-      if (includeGitHub) {
-        try {
-          const headers = { Accept: 'application/vnd.github+json' };
-          const [commitRes, prsRes] = await Promise.all([
-            fetch(`https://api.github.com/repos/${GITHUB_REPO}/commits/main`, {
-              headers,
-              cache: 'no-store',
-            }),
-            fetch(`https://api.github.com/repos/${GITHUB_REPO}/pulls?state=open&per_page=5`, {
-              headers,
-              cache: 'no-store',
-            }),
-          ]);
-
-          if (commitRes.ok) {
-            const commitData = (await commitRes.json()) as {
-              sha?: string;
-              html_url?: string;
-              commit?: {
-                message?: string;
-                committer?: { date?: string };
-                author?: { date?: string };
-              };
-            };
-            githubCommitSha = commitData.sha?.slice(0, 7);
-            githubCommitMessage = commitData.commit?.message?.split('\n')[0];
-            githubCommitUrl = commitData.html_url;
-
-            const commitIso =
-              commitData.commit?.committer?.date ?? commitData.commit?.author?.date;
-            if (commitIso) {
-              const commitMs = new Date(commitIso).getTime();
-              const buildMs = new Date(__BUILD_ID__).getTime();
-              if (!Number.isNaN(commitMs) && !Number.isNaN(buildMs)) {
-                githubAhead = commitMs > buildMs + 120_000;
-              }
-            }
-          }
-
-          if (prsRes.ok) {
-            const prs = (await prsRes.json()) as unknown[];
-            if (Array.isArray(prs)) openPullRequests = prs.length;
-          }
-        } catch {
-          // GitHub API is optioneel; host version.json blijft leidend voor reload
-        }
-      }
-
-      const hostHasUpdate = Boolean(hostData.buildId && hostData.buildId !== __BUILD_ID__);
-      setUpdateState((prev) => ({
-        status: hostHasUpdate ? 'update-available' : 'up-to-date',
-        remoteBuildId: hostData.buildId,
-        githubCommitSha: githubCommitSha ?? prev.githubCommitSha,
-        githubCommitMessage: githubCommitMessage ?? prev.githubCommitMessage,
-        githubCommitUrl: githubCommitUrl ?? prev.githubCommitUrl,
-        githubAhead: includeGitHub ? githubAhead : prev.githubAhead,
-        openPullRequests: openPullRequests ?? prev.openPullRequests,
-      }));
-    } catch {
-      setUpdateState((prev) => ({ ...prev, status: 'error' }));
-    }
-  }, []);
-
-  const applyUpdate = useCallback(() => {
-    window.location.reload();
-  }, []);
-
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      void checkForUpdates(false);
-    }, 60000);
-    return () => window.clearInterval(id);
-  }, [checkForUpdates]);
 
   const totalBytesPerAgent = 384;
   const totalPopulationKB = ((popSize * totalBytesPerAgent) / 1024).toFixed(1);
@@ -902,7 +808,7 @@ export default function App() {
             <div className="border-t border-slate-800 pt-4 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-medium text-slate-300">
-                  6. App-updates & GitHub
+                  6. Opslag &amp; broncode
                 </div>
                 <a
                   href={GITHUB_URL}
@@ -914,69 +820,8 @@ export default function App() {
                 </a>
               </div>
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Je geëvolueerde genoom wordt lokaal bewaard bij updates. Host-build &amp; GitHub{' '}
-                <code className="text-slate-300">main</code> worden samen gecontroleerd.
+                Je geëvolueerde genoom wordt automatisch lokaal bewaard in je browser.
               </p>
-              {updateState.githubCommitSha && (
-                <div className="text-[11px] font-mono text-slate-300 bg-[#0B0F19] border border-slate-800 rounded px-2.5 py-1.5 space-y-0.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <a
-                      href={updateState.githubCommitUrl ?? GITHUB_URL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-cyan-300 hover:underline truncate"
-                    >
-                      main@{updateState.githubCommitSha}
-                    </a>
-                    {updateState.githubAhead && (
-                      <span className="text-amber-300 shrink-0">Nieuwer op GitHub</span>
-                    )}
-                  </div>
-                  {updateState.githubCommitMessage && (
-                    <div className="text-slate-400 truncate">{updateState.githubCommitMessage}</div>
-                  )}
-                  {updateState.openPullRequests && updateState.openPullRequests > 0 ? (
-                    <a
-                      href={`${GITHUB_URL}/pulls`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block text-amber-300 hover:underline"
-                    >
-                      {updateState.openPullRequests} open Pull Request(s) bekijken
-                    </a>
-                  ) : null}
-                </div>
-              )}
-              {updateState.status === 'update-available' ? (
-                <button
-                  type="button"
-                  onClick={applyUpdate}
-                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-semibold bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-md transition-colors"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  Nieuwe build beschikbaar — werk nu bij
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => void checkForUpdates(true)}
-                  disabled={updateState.status === 'checking'}
-                  className="w-full inline-flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium bg-[#0B0F19] border border-slate-800 hover:border-cyan-500/50 disabled:opacity-60 text-slate-200 rounded-md transition-colors"
-                >
-                  <RefreshCw
-                    className={`w-3.5 h-3.5 text-cyan-400 ${
-                      updateState.status === 'checking' ? 'animate-spin' : ''
-                    }`}
-                  />
-                  {updateState.status === 'checking'
-                    ? 'Controleren op fixes...'
-                    : updateState.status === 'up-to-date'
-                      ? 'Up-to-date (opnieuw checken)'
-                      : updateState.status === 'error'
-                        ? 'Check mislukt — probeer opnieuw'
-                        : 'Controleer op updates'}
-                </button>
-              )}
             </div>
           </aside>
 
@@ -1334,9 +1179,6 @@ export default function App() {
             taskId={taskId}
             bitWidth={bitWidth}
             generation={generation}
-            updateState={updateState}
-            onCheckUpdate={() => void checkForUpdates(true)}
-            onApplyUpdate={applyUpdate}
           />
         </main>
       )}

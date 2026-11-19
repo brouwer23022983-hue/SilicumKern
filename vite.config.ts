@@ -5,37 +5,11 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
-  const buildId = new Date().toISOString();
-
   return {
     base: process.env.VITE_BASE || '/',
-    define: {
-      __BUILD_ID__: JSON.stringify(buildId),
-    },
     plugins: [
       react(),
       tailwindcss(),
-      {
-        name: 'silicium-version-manifest',
-        configureServer(server) {
-          server.middlewares.use('/version.json', (_req, res) => {
-            res.setHeader('Content-Type', 'application/json');
-            res.setHeader('Cache-Control', 'no-store');
-            res.end(JSON.stringify({ buildId }));
-          });
-        },
-        closeBundle(error?: Error): void {
-          if (error) return;
-          const distDir = path.resolve(__dirname, 'dist');
-          if (fs.existsSync(distDir)) {
-            fs.writeFileSync(
-              path.join(distDir, 'version.json'),
-              JSON.stringify({ buildId }),
-              'utf-8'
-            );
-          }
-        },
-      },
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.
