@@ -1,20 +1,20 @@
-import React, { useState } from 'react';
-import { FlaskConical, Play } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { FlaskConical, Loader2, Play } from 'lucide-react';
 import {
   BitWidth,
   GeneralizationResult,
   SmcAbResult,
   TASKS,
   TaskId,
-  runGeneralizationBenchmark,
-  runSmcAbExperiment,
 } from '../engine/machineVm';
+import type { WorkerRequest, WorkerResponse } from '../workers/evolutionWorker';
 
 interface BenchmarkViewProps {
   genome: Uint8Array;
   coGenome: Uint8Array | null;
   taskId: TaskId;
   bitWidth: BitWidth;
+  maxCycles: number;
   generation: number;
   allowSmc: boolean;
   inheritSmc: boolean;
@@ -27,6 +27,7 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
   coGenome,
   taskId,
   bitWidth,
+  maxCycles,
   generation,
   allowSmc,
   inheritSmc,
@@ -36,22 +37,79 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
   const [genResult, setGenResult] = useState<GeneralizationResult | null>(null);
   const [abResult, setAbResult] = useState<SmcAbResult | null>(null);
   const [abGenerations, setAbGenerations] = useState<number>(40);
+  const [isRunningGen, setIsRunningGen] = useState<boolean>(false);
+  const [isRunningAb, setIsRunningAb] = useState<boolean>(false);
+
+  const workerRef = useRef<Worker | null>(null);
+  const reqIdRef = useRef<number>(0);
+  const activeGenReqRef = useRef<number>(0);
+  const activeAbReqRef = useRef<number>(0);
+
+  useEffect(() => {
+    const worker = new Worker(new URL('../workers/evolutionWorker.ts', import.meta.url), {
+      type: 'module',
+    });
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const msg = event.data;
+      if (!msg) return;
+      if (msg.type === 'benchmark-gen-result' && msg.requestId === activeGenReqRef.current) {
+        setGenResult(msg.result);
+        setIsRunningGen(false);
+      } else if (msg.type === 'benchmark-ab-result' && msg.requestId === activeAbReqRef.current) {
+        setAbResult(msg.result);
+        setIsRunningAb(false);
+      }
+    };
+    worker.onerror = () => {
+      setIsRunningGen(false);
+      setIsRunningAb(false);
+    };
+    workerRef.current = worker;
+
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+    };
+  }, []);
 
   const handleRunGeneralization = () => {
-    const res = runGeneralizationBenchmark(
-      genome,
+    const worker = workerRef.current;
+    if (!worker || isRunningGen) return;
+    const requestId = ++reqIdRef.current;
+    activeGenReqRef.current = requestId;
+    setIsRunningGen(true);
+    const payload: WorkerRequest = {
+      type: 'benchmark-gen',
+      requestId,
+      genome: new Uint8Array(genome),
       taskId,
       bitWidth,
       allowSmc,
-      dualCore ? coGenome : null,
-      100
-    );
-    setGenResult(res);
+      coGenome: dualCore && coGenome ? new Uint8Array(coGenome) : null,
+      seedsTested: 100,
+      maxCycles,
+    };
+    worker.postMessage(payload);
   };
 
   const handleRunAb = () => {
-    const res = runSmcAbExperiment(taskId, bitWidth, 48, abGenerations, mutationRate, inheritSmc);
-    setAbResult(res);
+    const worker = workerRef.current;
+    if (!worker || isRunningAb) return;
+    const requestId = ++reqIdRef.current;
+    activeAbReqRef.current = requestId;
+    setIsRunningAb(true);
+    const payload: WorkerRequest = {
+      type: 'benchmark-ab',
+      requestId,
+      taskId,
+      bitWidth,
+      popSize: 48,
+      generations: abGenerations,
+      mutationRate,
+      inheritSmc,
+      maxCycles,
+    };
+    worker.postMessage(payload);
   };
 
   return (
@@ -63,12 +121,13 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
               Experimenten &amp; Validatie — {TASKS[taskId].name}
             </h2>
             <p className="text-xs text-slate-400 mt-1">
-              Test jouw geëvolueerde kern (generatie {generation}, {bitWidth}-bit) objectief op ongeziene
-              seeds en vergelijk evolutie met en zonder zelf-modificatie (<code className="text-amber-300">PWRITE</code>).
+              Test jouw geëvolueerde kern (generatie {generation}, {bitWidth}-bit, {maxCycles}{' '}
+              cycli/tick) objectief in een Web Worker op ongeziene seeds en vergelijk evolutie met en zonder{' '}
+              <code className="text-amber-300">PWRITE</code>.
             </p>
           </div>
           <div className="text-xs font-mono text-slate-400">
-            Evaluatie: 3 vaste anker-seeds + 1 roterende seed per generatie
+            Evaluatie: 4 anker-regimes + 2 epoche-seeds per generatie
           </div>
         </div>
       </div>
@@ -87,11 +146,16 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
 
           <button
             type="button"
+            disabled={isRunningGen}
             onClick={handleRunGeneralization}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-cyan-500 hover:bg-cyan-400 text-slate-950 rounded-md transition-colors whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-cyan-500 hover:bg-cyan-400 disabled:opacity-60 disabled:cursor-wait text-slate-950 rounded-md transition-colors whitespace-nowrap shrink-0"
           >
-            <Play className="w-3.5 h-3.5" />
-            Draai 100-Seed Test
+            {isRunningGen ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Play className="w-3.5 h-3.5" />
+            )}
+            {isRunningGen ? 'Testen in Worker...' : 'Draai 100-Seed Test'}
           </button>
         </div>
 
@@ -163,8 +227,9 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
           <div className="flex items-center gap-3">
             <select
               value={abGenerations}
+              disabled={isRunningAb}
               onChange={(e) => setAbGenerations(Number(e.target.value))}
-              className="bg-[#080B12] border border-slate-700 rounded px-2.5 py-1.5 text-xs font-mono text-slate-200"
+              className="bg-[#080B12] border border-slate-700 rounded px-2.5 py-1.5 text-xs font-mono text-slate-200 disabled:opacity-60"
             >
               <option value={25}>25 generaties</option>
               <option value={40}>40 generaties</option>
@@ -172,11 +237,16 @@ export const BenchmarkView: React.FC<BenchmarkViewProps> = ({
             </select>
             <button
               type="button"
+              disabled={isRunningAb}
               onClick={handleRunAb}
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-md transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold bg-amber-500 hover:bg-amber-400 disabled:opacity-60 disabled:cursor-wait text-slate-950 rounded-md transition-colors whitespace-nowrap shrink-0"
             >
-              <FlaskConical className="w-3.5 h-3.5" />
-              Start A/B-Experiment
+              {isRunningAb ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <FlaskConical className="w-3.5 h-3.5" />
+              )}
+              {isRunningAb ? 'Evolueren in Worker...' : 'Start A/B-Experiment'}
             </button>
           </div>
         </div>

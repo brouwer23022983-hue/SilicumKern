@@ -192,26 +192,66 @@ export const ArenaCanvas: React.FC<ArenaCanvasProps> = ({ env }) => {
       ctx.fillStyle = '#F59E0B';
       ctx.fillText('-- WACHTRIJ', padL + 148, padT + 14);
     } else {
-      // Bitstream 4-bit signal timeline
-      const pad = 24;
-      const bw = w - pad * 2;
+      const isHardware = env.taskId === 'hardware';
+      const hasCameraGrid =
+        isHardware && env.cameraActive && Array.isArray(env.cameraGrid) && env.cameraGrid.length === 64;
+
+      const pad = 20;
+      let timelineX = pad;
+      let timelineW = w - pad * 2;
+
+      if (hasCameraGrid && env.cameraGrid) {
+        const matrixSize = Math.min(h - pad * 2 - 20, Math.floor(w * 0.34));
+        const mx = pad;
+        const my = pad + 18;
+        const cellSize = matrixSize / 8;
+
+        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.fillStyle = '#10B981';
+        ctx.fillText('CAMERA-OOG 8x8', mx, pad + 6);
+
+        for (let r = 0; r < 8; r++) {
+          for (let c = 0; c < 8; c++) {
+            const v = env.cameraGrid[r * 8 + c] ?? 0;
+            ctx.fillStyle = `rgb(${v}, ${Math.min(255, Math.round(v * 1.08))}, ${Math.min(255, Math.round(v * 1.15))})`;
+            ctx.fillRect(
+              mx + c * cellSize,
+              my + r * cellSize,
+              Math.ceil(cellSize - 1),
+              Math.ceil(cellSize - 1)
+            );
+          }
+        }
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(mx, my, matrixSize, matrixSize);
+
+        timelineX = mx + matrixSize + 18;
+        timelineW = Math.max(120, w - timelineX - pad);
+      }
+
       const bh = h - pad * 2;
       const rows = 24;
-      const colW = bw / rows;
+      const colW = timelineW / rows;
 
       ctx.font = '10px "JetBrains Mono", monospace';
       ctx.fillStyle = '#64748B';
-      ctx.fillText('DOEL (CURR XOR PREV) VS ACT-VOORSPELLING (LAATSTE 24 BUS-CYCLI)', pad, 16);
+      ctx.fillText(
+        isHardware
+          ? 'OPEN HARDWARE-BUS ((P0 ^ P1) + (dP0 >> 1)) VS ACT-RESPONS'
+          : 'DOEL (P0 XOR (P1 >> 1)) VS ACT-VOORSPELLING (LAATSTE 24 CYCLI)',
+        timelineX,
+        16
+      );
 
       const hist = env.bitStreamHistory;
       for (let i = 0; i < rows; i++) {
-        const x = pad + i * colW;
+        const x = timelineX + i * colW;
         const item = hist[i];
         ctx.strokeStyle = '#182235';
         ctx.strokeRect(x + 1, pad + 6, colW - 2, bh - 12);
 
         if (item) {
-          // Draw 4 bits of target (top) and prediction (bottom)
           for (let b = 0; b < 4; b++) {
             const tBit = (item.target >> (3 - b)) & 1;
             const pBit = (item.pred >> (3 - b)) & 1;
@@ -219,14 +259,14 @@ export const ArenaCanvas: React.FC<ArenaCanvasProps> = ({ env }) => {
             const yBot = pad + bh / 2 + 12 + b * ((bh - 50) / 8);
 
             ctx.fillStyle = tBit ? '#06B6D4' : '#1E293B';
-            ctx.fillRect(x + 4, yTop, colW - 8, 8);
+            ctx.fillRect(x + 3, yTop, Math.max(2, colW - 6), 8);
 
             ctx.fillStyle = pBit ? (item.match ? '#10B981' : '#F59E0B') : '#1E293B';
-            ctx.fillRect(x + 4, yBot, colW - 8, 8);
+            ctx.fillRect(x + 3, yBot, Math.max(2, colW - 6), 8);
           }
 
           ctx.fillStyle = item.match ? '#10B981' : '#F43F5E';
-          ctx.fillText(item.match ? 'OK' : 'XX', x + 4, pad + bh - 10);
+          ctx.fillText(item.match ? 'OK' : 'XX', x + 3, pad + bh - 10);
         }
       }
     }
@@ -266,6 +306,16 @@ export const ArenaCanvas: React.FC<ArenaCanvasProps> = ({ env }) => {
               <span className="text-emerald-400">Exacte hits {env.bitExactHits}</span>
             </>
           )}
+          {env.taskId === 'hardware' && (
+            <>
+              <span className="text-cyan-400">ChA {env.hwStreamA}</span>
+              <span className="text-amber-400">dB {env.hwStreamB}</span>
+              <span className="text-emerald-400">Hits {env.bitExactHits}</span>
+              <span className={env.cameraActive ? 'text-emerald-300' : 'text-slate-400'}>
+                {env.cameraActive ? 'Camera Live' : 'Bus/HID'}
+              </span>
+            </>
+          )}
         </div>
       </div>
 
@@ -273,8 +323,8 @@ export const ArenaCanvas: React.FC<ArenaCanvasProps> = ({ env }) => {
         <canvas ref={canvasRef} className="w-full h-full block cursor-crosshair" />
       </div>
 
-      {/* Hardware sensor port bus strip */}
-      <div className="grid grid-cols-3 sm:grid-cols-6 border-t border-slate-800 bg-[#0A0E17] divide-x divide-slate-800/80">
+      {/* Hardware sensor port bus strip (P0..P7) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 border-t border-slate-800 bg-[#0A0E17] divide-x divide-y divide-slate-800/80">
         {spec.ports.map((label, idx) => (
           <div key={label} className="px-2.5 py-2">
             <div className="text-[11px] text-slate-400 truncate">{label}</div>

@@ -16,6 +16,8 @@ interface CodeExportViewProps {
   genome: Uint8Array;
   taskId: TaskId;
   bitWidth: BitWidth;
+  maxCycles: number;
+  popSize: number;
   generation: number;
 }
 
@@ -25,17 +27,20 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
   genome,
   taskId,
   bitWidth,
+  maxCycles,
+  popSize,
   generation,
 }) => {
   const [format, setFormat] = useState<ExportFormat>('c99');
   const [copied, setCopied] = useState(false);
 
   const code = useMemo(() => {
-    if (format === 'c99') return generateC99Code(genome, taskId, bitWidth);
-    if (format === 'trainer') return generateStandaloneTrainerC99(genome, taskId, bitWidth);
-    if (format === 'nasm') return generateNasmX64Code(genome, taskId, bitWidth);
+    if (format === 'c99') return generateC99Code(genome, taskId, bitWidth, maxCycles);
+    if (format === 'trainer')
+      return generateStandaloneTrainerC99(genome, taskId, bitWidth, maxCycles, popSize);
+    if (format === 'nasm') return generateNasmX64Code(genome, taskId, bitWidth, maxCycles);
     return generateHexDump(genome);
-  }, [format, genome, taskId, bitWidth]);
+  }, [format, genome, taskId, bitWidth, maxCycles, popSize]);
 
   const filename =
     format === 'c99'

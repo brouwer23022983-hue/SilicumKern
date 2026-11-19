@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Camera,
   Cpu,
   Flame,
   Pause,
@@ -7,6 +8,7 @@ import {
   RotateCcw,
   SkipForward,
   StepForward,
+  VideoOff,
   Zap,
 } from 'lucide-react';
 import { ArenaCanvas } from './components/ArenaCanvas';
@@ -32,20 +34,40 @@ import {
   decodeInstruction,
   disassembleInstruction,
   encodeInstruction,
-  evolveGeneration,
   formatHexBytes,
   runVMTick,
   stepEnvironment,
   stepSingleInstruction,
+  updateEnvPorts,
 } from './engine/machineVm';
+import {
+  CycleBudget,
+  DetectedHardware,
+  PeripheralMonitor,
+  PopSizeOption,
+  createPeripheralMonitor,
+  detectHardwareAsync,
+  detectHardwareSync,
+  subscribeHardwareHotplug,
+} from './engine/hardwareProbe';
+import type { WorkerRequest, WorkerResponse } from './workers/evolutionWorker';
 
 type ActiveView = 'workbench' | 'isa' | 'benchmark' | 'export';
 
 const STORAGE_KEY = 'siliciumkern_saved_state_v2';
 
+interface SavedAgent {
+  id: number;
+  genome: number[];
+  fitness: number;
+  generationBorn: number;
+}
+
 interface SavedSession {
   taskId: TaskId;
   bitWidth: BitWidth;
+  maxCycles?: CycleBudget;
+  autoHardware?: boolean;
   allowSmc?: boolean;
   inheritSmc?: boolean;
   dualCore?: boolean;
@@ -54,9 +76,13 @@ interface SavedSession {
   fromScratch: boolean;
   generation: number;
   bestGenome: number[];
-  population: Array<{ id: number; genome: number[]; fitness: number; generationBorn: number }>;
+  population: SavedAgent[];
+  coPopulation?: SavedAgent[] | null;
+  coBestFitness?: number | null;
   metrics: GenerationMetric[];
 }
+
+const VALID_TASKS: TaskId[] = ['homeostasis', 'arena', 'bitstream', 'hardware'];
 
 function loadSavedSession(): SavedSession | null {
   try {
@@ -65,6 +91,9 @@ function loadSavedSession(): SavedSession | null {
     const parsed = JSON.parse(raw) as SavedSession;
     if (!parsed || !Array.isArray(parsed.bestGenome) || parsed.bestGenome.length !== PROG_LEN * 4) {
       return null;
+    }
+    if (!VALID_TASKS.includes(parsed.taskId)) {
+      parsed.taskId = 'homeostasis';
     }
     return parsed;
   } catch {
@@ -77,13 +106,16 @@ function initPopulation(
   taskId: TaskId,
   fromScratch: boolean,
   seed: number,
-  bitWidth: BitWidth
+  bitWidth: BitWidth,
+  dualCore: boolean = false
 ): Agent[] {
   const rng = createRng(seed);
   const agents: Agent[] = [];
   for (let i = 0; i < popSize; i++) {
     const genome =
-      fromScratch || i > 0 ? createRandomGenome(rng, bitWidth) : createStarterGenome(taskId);
+      fromScratch || i > 0
+        ? createRandomGenome(rng, bitWidth, { dualCore, isCoCore: false })
+        : createStarterGenome(taskId);
     agents.push({
       id: i,
       genome,
@@ -92,6 +124,16 @@ function initPopulation(
     });
   }
   return agents;
+}
+
+function initCoPopulation(popSize: number, seed: number, bitWidth: BitWidth): Agent[] {
+  const rng = createRng(seed);
+  return Array.from({ length: popSize }, (_, i) => ({
+    id: i,
+    genome: createRandomGenome(rng, bitWidth, { dualCore: true, isCoCore: true }),
+    fitness: 0,
+    generationBorn: 0,
+  }));
 }
 
 function formatRegHex(val: string, bitWidth: BitWidth): string {
@@ -116,14 +158,27 @@ function genomesEqual(a: Uint8Array, b: Uint8Array): boolean {
 
 export default function App() {
   const initialSaved = useMemo(() => loadSavedSession(), []);
+  const initialHardware = useMemo(() => detectHardwareSync(), []);
+
+  const [detectedHw, setDetectedHw] = useState<DetectedHardware>(initialHardware);
+  const [autoHardware, setAutoHardware] = useState<boolean>(
+    initialSaved?.autoHardware ?? (initialSaved ? false : true)
+  );
+
+  const initialBitWidth: BitWidth = initialSaved?.bitWidth ?? initialHardware.recommendedBitWidth;
+  const initialDualCore: boolean = initialSaved?.dualCore ?? initialHardware.recommendedDualCore;
+  const initialPopSize: number = initialSaved?.popSize ?? initialHardware.recommendedPopSize;
+  const initialMaxCycles: CycleBudget =
+    initialSaved?.maxCycles ?? (initialSaved ? 24 : initialHardware.recommendedCycles);
 
   const [activeView, setActiveView] = useState<ActiveView>('workbench');
   const [taskId, setTaskId] = useState<TaskId>(initialSaved?.taskId ?? 'homeostasis');
-  const [bitWidth, setBitWidth] = useState<BitWidth>(initialSaved?.bitWidth ?? 64);
+  const [bitWidth, setBitWidth] = useState<BitWidth>(initialBitWidth);
+  const [maxCycles, setMaxCycles] = useState<CycleBudget>(initialMaxCycles);
   const [allowSmc, setAllowSmc] = useState<boolean>(initialSaved?.allowSmc ?? true);
   const [inheritSmc, setInheritSmc] = useState<boolean>(initialSaved?.inheritSmc ?? false);
-  const [dualCore, setDualCore] = useState<boolean>(initialSaved?.dualCore ?? false);
-  const [popSize, setPopSize] = useState<number>(initialSaved?.popSize ?? 64);
+  const [dualCore, setDualCore] = useState<boolean>(initialDualCore);
+  const [popSize, setPopSize] = useState<number>(initialPopSize);
   const [mutationRate, setMutationRate] = useState<number>(initialSaved?.mutationRate ?? 0.08);
   const [fromScratch, setFromScratch] = useState<boolean>(initialSaved?.fromScratch ?? true);
 
@@ -132,7 +187,7 @@ export default function App() {
   const [isSimRunning, setIsSimRunning] = useState<boolean>(true);
   const [metrics, setMetrics] = useState<GenerationMetric[]>(initialSaved?.metrics ?? []);
 
-  const [population, setPopulation] = useState<Agent[]>(() => {
+  const initialFreshPop = useMemo(() => {
     if (initialSaved && Array.isArray(initialSaved.population) && initialSaved.population.length > 0) {
       return initialSaved.population.map((a) => ({
         id: a.id,
@@ -141,17 +196,52 @@ export default function App() {
         generationBorn: a.generationBorn,
       }));
     }
-    return initPopulation(64, 'homeostasis', true, 4242, 64);
+    return initPopulation(initialPopSize, 'homeostasis', true, 4242, initialBitWidth, initialDualCore);
+  }, [initialSaved, initialPopSize, initialBitWidth, initialDualCore]);
+
+  const [population, setPopulation] = useState<Agent[]>(initialFreshPop);
+  const [coPopulation, setCoPopulation] = useState<Agent[] | null>(() => {
+    if (
+      initialSaved &&
+      Array.isArray(initialSaved.coPopulation) &&
+      initialSaved.coPopulation.length > 0
+    ) {
+      return initialSaved.coPopulation.map((a) => ({
+        id: a.id,
+        genome: new Uint8Array(a.genome),
+        fitness: a.fitness,
+        generationBorn: a.generationBorn,
+      }));
+    }
+    if (initialDualCore) {
+      return initCoPopulation(initialPopSize, 8484, initialBitWidth);
+    }
+    return null;
   });
+  const [coBestFitness, setCoBestFitness] = useState<number | null>(
+    initialSaved?.coBestFitness ?? null
+  );
   const [bestGenome, setBestGenome] = useState<Uint8Array>(() =>
     initialSaved
       ? new Uint8Array(initialSaved.bestGenome)
-      : new Uint8Array(initPopulation(64, 'homeostasis', true, 4242, 64)[0].genome)
+      : new Uint8Array(initialFreshPop[0].genome)
   );
+  const [bestCoGenome, setBestCoGenome] = useState<Uint8Array | null>(() => {
+    if (
+      initialSaved &&
+      Array.isArray(initialSaved.coPopulation) &&
+      initialSaved.coPopulation.length > 0
+    ) {
+      return new Uint8Array(initialSaved.coPopulation[0].genome);
+    }
+    return null;
+  });
 
   const [env, setEnv] = useState<EnvSnapshot>(() =>
-    createInitialEnv(initialSaved?.taskId ?? 'homeostasis', 9001)
+    createInitialEnv(initialSaved?.taskId ?? 'homeostasis', 9001, initialHardware.capabilityMask)
   );
+  const [cameraActive, setCameraActive] = useState<boolean>(false);
+  const [cameraStatus, setCameraStatus] = useState<string | null>(null);
   const [vmSnapshot, setVmSnapshot] = useState<{
     regs: string[];
     xmm: number[][];
@@ -195,22 +285,46 @@ export default function App() {
   const [selectedInstIdx, setSelectedInstIdx] = useState<number | null>(null);
 
   const vmRef = useRef<VMState>(createVMState(bestGenome));
-  const vmBRef = useRef<VMState>(createVMState(population[1]?.genome ?? bestGenome));
+  const vmBRef = useRef<VMState>(createVMState(bestCoGenome ?? bestGenome));
   const sharedBusRef = useRef<Int32Array>(new Int32Array(8));
-  const envRef = useRef<EnvSnapshot>(createInitialEnv(initialSaved?.taskId ?? 'homeostasis', 9001));
+  const envRef = useRef<EnvSnapshot>(
+    createInitialEnv(initialSaved?.taskId ?? 'homeostasis', 9001, initialHardware.capabilityMask)
+  );
   const simRngRef = useRef<() => number>(createRng(77777));
   const pendingDisturbanceRef = useRef<{ tempSpike?: number; loadSpike?: number; energyDip?: number }>({});
+  const peripheralMonitorRef = useRef<PeripheralMonitor | null>(null);
+  const detectedHwRef = useRef<DetectedHardware>(detectedHw);
+  detectedHwRef.current = detectedHw;
+
+  const workerRef = useRef<Worker | null>(null);
+  const sessionIdRef = useRef<number>(1);
+
   const bestGenomeRef = useRef<Uint8Array>(bestGenome);
   bestGenomeRef.current = bestGenome;
+
+  const bestCoGenomeRef = useRef<Uint8Array | null>(bestCoGenome);
+  bestCoGenomeRef.current = bestCoGenome;
 
   const populationRef = useRef<Agent[]>(population);
   populationRef.current = population;
 
+  const coPopulationRef = useRef<Agent[] | null>(coPopulation);
+  coPopulationRef.current = coPopulation;
+
   const generationRef = useRef<number>(generation);
   generationRef.current = generation;
 
+  const taskIdRef = useRef<TaskId>(taskId);
+  taskIdRef.current = taskId;
+
   const bitWidthRef = useRef<BitWidth>(bitWidth);
   bitWidthRef.current = bitWidth;
+
+  const maxCyclesRef = useRef<CycleBudget>(maxCycles);
+  maxCyclesRef.current = maxCycles;
+
+  const autoHardwareRef = useRef<boolean>(autoHardware);
+  autoHardwareRef.current = autoHardware;
 
   const allowSmcRef = useRef<boolean>(allowSmc);
   allowSmcRef.current = allowSmc;
@@ -220,6 +334,9 @@ export default function App() {
 
   const dualCoreRef = useRef<boolean>(dualCore);
   dualCoreRef.current = dualCore;
+
+  const mutationRateRef = useRef<number>(mutationRate);
+  mutationRateRef.current = mutationRate;
 
   const syncVmToState = useCallback(() => {
     const v = vmRef.current;
@@ -250,10 +367,17 @@ export default function App() {
   }, []);
 
   const resetLivePreview = useCallback(
-    (nextTask: TaskId, genomeOverride?: Uint8Array) => {
+    (nextTask: TaskId, genomeOverride?: Uint8Array, coGenomeOverride?: Uint8Array | null) => {
       const targetGenome = genomeOverride ?? bestGenomeRef.current;
-      const coGenome = populationRef.current[0]?.genome ?? targetGenome;
-      const freshEnv = createInitialEnv(nextTask, Math.floor(Date.now() % 100000) + 17);
+      const coGenome =
+        coGenomeOverride !== undefined
+          ? (coGenomeOverride ?? targetGenome)
+          : (bestCoGenomeRef.current ?? coPopulationRef.current?.[0]?.genome ?? targetGenome);
+      const freshEnv = createInitialEnv(
+        nextTask,
+        Math.floor(Date.now() % 100000) + 17,
+        detectedHwRef.current.capabilityMask
+      );
       const freshVm = createVMState(targetGenome);
       const freshVmB = createVMState(coGenome);
       sharedBusRef.current = new Int32Array(8);
@@ -266,10 +390,51 @@ export default function App() {
         bestGenomeRef.current = new Uint8Array(genomeOverride);
         setBestGenome(new Uint8Array(genomeOverride));
       }
+      if (coGenomeOverride !== undefined) {
+        const cloned = coGenomeOverride ? new Uint8Array(coGenomeOverride) : null;
+        bestCoGenomeRef.current = cloned;
+        setBestCoGenome(cloned);
+      }
       setEnv({ ...freshEnv });
       syncVmToState();
     },
     [syncVmToState]
+  );
+
+  const syncWorkerState = useCallback(
+    (
+      nextPop: Agent[],
+      nextCoPop: Agent[] | null,
+      nextTask: TaskId,
+      nextGen: number,
+      nextWidth: BitWidth,
+      nextDualCore: boolean,
+      stopEvolution: boolean = false,
+      nextCycles: CycleBudget = maxCyclesRef.current
+    ) => {
+      const worker = workerRef.current;
+      if (!worker) return;
+      const nextSession = ++sessionIdRef.current;
+      if (stopEvolution) {
+        worker.postMessage({ type: 'stop' } satisfies WorkerRequest);
+      }
+      const syncMsg: WorkerRequest = {
+        type: 'sync',
+        sessionId: nextSession,
+        population: nextPop,
+        coPopulation: nextCoPop,
+        taskId: nextTask,
+        generation: nextGen,
+        mutationRate: mutationRateRef.current,
+        bitWidth: nextWidth,
+        allowSmc: allowSmcRef.current,
+        inheritSmc: inheritSmcRef.current,
+        dualCore: nextDualCore,
+        maxCycles: nextCycles,
+      };
+      worker.postMessage(syncMsg);
+    },
+    []
   );
 
   const handleResetAll = useCallback(
@@ -277,61 +442,106 @@ export default function App() {
       nextTask: TaskId = taskId,
       nextPopSize: number = popSize,
       nextScratch: boolean = fromScratch,
-      nextWidth: BitWidth = bitWidth
+      nextWidth: BitWidth = bitWidth,
+      nextDualCore: boolean = dualCoreRef.current,
+      nextCycles: CycleBudget = maxCyclesRef.current
     ) => {
       setIsEvolving(false);
       const seed = Math.floor(Date.now() % 100000) + 313;
-      const newPop = initPopulation(nextPopSize, nextTask, nextScratch, seed, nextWidth);
+      const newPop = initPopulation(
+        nextPopSize,
+        nextTask,
+        nextScratch,
+        seed,
+        nextWidth,
+        nextDualCore
+      );
+      const newCoPop = nextDualCore
+        ? initCoPopulation(nextPopSize, seed + 7919, nextWidth)
+        : null;
+      const firstCo = newCoPop ? new Uint8Array(newCoPop[0].genome) : null;
+
       setPopulation(newPop);
       populationRef.current = newPop;
+      setCoPopulation(newCoPop);
+      coPopulationRef.current = newCoPop;
+      setCoBestFitness(null);
       setGeneration(0);
       generationRef.current = 0;
       setMetrics([]);
       setSelectedInstIdx(null);
-      resetLivePreview(nextTask, newPop[0].genome);
+      resetLivePreview(nextTask, newPop[0].genome, firstCo);
+      syncWorkerState(
+        newPop,
+        newCoPop,
+        nextTask,
+        0,
+        nextWidth,
+        nextDualCore,
+        true,
+        nextCycles
+      );
     },
-    [taskId, popSize, fromScratch, bitWidth, resetLivePreview]
+    [taskId, popSize, fromScratch, bitWidth, resetLivePreview, syncWorkerState]
+  );
+
+  const applyHardwareProfile = useCallback(
+    (hw: DetectedHardware, forceResetIfPopChanged: boolean = true) => {
+      setAutoHardware(true);
+      autoHardwareRef.current = true;
+      setBitWidth(hw.recommendedBitWidth);
+      bitWidthRef.current = hw.recommendedBitWidth;
+      setMaxCycles(hw.recommendedCycles);
+      maxCyclesRef.current = hw.recommendedCycles;
+      setDualCore(hw.recommendedDualCore);
+      dualCoreRef.current = hw.recommendedDualCore;
+
+      if (hw.recommendedPopSize !== populationRef.current.length && forceResetIfPopChanged) {
+        setPopSize(hw.recommendedPopSize);
+        handleResetAll(
+          taskIdRef.current,
+          hw.recommendedPopSize,
+          fromScratch,
+          hw.recommendedBitWidth,
+          hw.recommendedDualCore,
+          hw.recommendedCycles
+        );
+        return;
+      }
+
+      if (hw.recommendedDualCore && !coPopulationRef.current) {
+        const newCoPop = initCoPopulation(
+          populationRef.current.length,
+          Math.floor(Date.now() % 100000) + 8484,
+          hw.recommendedBitWidth
+        );
+        const firstCo = new Uint8Array(newCoPop[0].genome);
+        setCoPopulation(newCoPop);
+        coPopulationRef.current = newCoPop;
+        setBestCoGenome(firstCo);
+        bestCoGenomeRef.current = firstCo;
+        vmBRef.current = createVMState(firstCo);
+        syncWorkerState(
+          populationRef.current,
+          newCoPop,
+          taskIdRef.current,
+          generationRef.current,
+          hw.recommendedBitWidth,
+          true,
+          false,
+          hw.recommendedCycles
+        );
+      }
+    },
+    [fromScratch, handleResetAll, syncWorkerState]
   );
 
   const runOneGeneration = useCallback(() => {
-    const res = evolveGeneration(
-      populationRef.current,
-      taskId,
-      generationRef.current,
-      mutationRate,
-      bitWidthRef.current,
-      {
-        allowSmc: allowSmcRef.current,
-        inheritSmc: inheritSmcRef.current,
-        dualCore: dualCoreRef.current,
-      }
-    );
-    const bestChanged = !genomesEqual(bestGenomeRef.current, res.bestAgent.genome);
-    populationRef.current = res.nextPopulation;
-    const nextGen = generationRef.current + 1;
-    generationRef.current = nextGen;
-
-    setPopulation(res.nextPopulation);
-    setGeneration(nextGen);
-    setBestGenome(new Uint8Array(res.bestAgent.genome));
-    bestGenomeRef.current = new Uint8Array(res.bestAgent.genome);
-
-    setMetrics((prev) => {
-      const updated = [
-        ...prev,
-        {
-          generation: nextGen,
-          bestFitness: res.bestFitness,
-          meanFitness: res.meanFitness,
-        },
-      ];
-      return updated.length > 120 ? updated.slice(updated.length - 120) : updated;
-    });
-
-    if (!envRef.current.alive || bestChanged) {
-      resetLivePreview(taskId, res.bestAgent.genome);
-    }
-  }, [taskId, mutationRate, resetLivePreview]);
+    const worker = workerRef.current;
+    if (!worker) return;
+    const msg: WorkerRequest = { type: 'step', sessionId: sessionIdRef.current };
+    worker.postMessage(msg);
+  }, []);
 
   const stepOneTick = useCallback(() => {
     if (!envRef.current.alive) {
@@ -339,12 +549,14 @@ export default function App() {
       return;
     }
     if (dualCoreRef.current) {
+      const coKernel =
+        bestCoGenomeRef.current ?? coPopulationRef.current?.[0]?.genome ?? bestGenomeRef.current;
       runVMTick(
-        populationRef.current[0]?.genome ?? bestGenomeRef.current,
+        coKernel,
         vmBRef.current,
         envRef.current.ports,
         bitWidthRef.current,
-        24,
+        maxCyclesRef.current,
         { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current }
       );
     }
@@ -353,12 +565,15 @@ export default function App() {
       vmRef.current,
       envRef.current.ports,
       bitWidthRef.current,
-      24,
+      maxCyclesRef.current,
       { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current }
     );
     const dist = pendingDisturbanceRef.current;
     pendingDisturbanceRef.current = {};
-    stepEnvironment(envRef.current, action, didAct, simRngRef.current, dist);
+    const livePeripheral = peripheralMonitorRef.current?.sampleFrame(
+      detectedHwRef.current.capabilityMask
+    );
+    stepEnvironment(envRef.current, action, didAct, simRngRef.current, dist, livePeripheral);
     setEnv({
       ...envRef.current,
       history: [...envRef.current.history],
@@ -380,7 +595,17 @@ export default function App() {
     if (res.acted) {
       const dist = pendingDisturbanceRef.current;
       pendingDisturbanceRef.current = {};
-      stepEnvironment(envRef.current, vmRef.current.out, true, simRngRef.current, dist);
+      const livePeripheral = peripheralMonitorRef.current?.sampleFrame(
+        detectedHwRef.current.capabilityMask
+      );
+      stepEnvironment(
+        envRef.current,
+        vmRef.current.out,
+        true,
+        simRngRef.current,
+        dist,
+        livePeripheral
+      );
       vmRef.current.ip = 0;
       vmRef.current.cyclesUsed = 0;
       setEnv({
@@ -393,13 +618,159 @@ export default function App() {
     syncVmToState();
   }, [syncVmToState]);
 
+  // Persistent Evolution Web Worker lifecycle (non-blocking UI)
   useEffect(() => {
-    if (!isEvolving) return;
-    const timer = window.setInterval(() => {
-      runOneGeneration();
-    }, 60);
-    return () => window.clearInterval(timer);
-  }, [isEvolving, runOneGeneration]);
+    const worker = new Worker(new URL('./workers/evolutionWorker.ts', import.meta.url), {
+      type: 'module',
+    });
+    workerRef.current = worker;
+
+    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      const msg = event.data;
+      if (!msg || msg.type !== 'generation') return;
+      if (msg.sessionId !== sessionIdRef.current) return;
+
+      const bestChanged = !genomesEqual(bestGenomeRef.current, msg.bestGenome);
+      const nextBest = new Uint8Array(msg.bestGenome);
+      const nextCo = msg.coGenome ? new Uint8Array(msg.coGenome) : null;
+
+      populationRef.current = msg.nextPopulation;
+      coPopulationRef.current = msg.nextCoPopulation;
+      generationRef.current = msg.generation;
+      bestGenomeRef.current = nextBest;
+      bestCoGenomeRef.current = nextCo;
+
+      setPopulation(msg.nextPopulation);
+      setCoPopulation(msg.nextCoPopulation);
+      setCoBestFitness(msg.coBestFitness);
+      setGeneration(msg.generation);
+      setBestGenome(nextBest);
+      setBestCoGenome(nextCo);
+
+      setMetrics((prev) => {
+        const updated = [
+          ...prev,
+          {
+            generation: msg.generation,
+            bestFitness: msg.bestFitness,
+            meanFitness: msg.meanFitness,
+          },
+        ];
+        return updated.length > 120 ? updated.slice(updated.length - 120) : updated;
+      });
+
+      if (!envRef.current.alive || bestChanged) {
+        resetLivePreview(taskIdRef.current, nextBest, nextCo);
+      }
+    };
+
+    const initSync: WorkerRequest = {
+      type: 'sync',
+      sessionId: sessionIdRef.current,
+      population: populationRef.current,
+      coPopulation: coPopulationRef.current,
+      taskId: taskIdRef.current,
+      generation: generationRef.current,
+      mutationRate: mutationRateRef.current,
+      bitWidth: bitWidthRef.current,
+      allowSmc: allowSmcRef.current,
+      inheritSmc: inheritSmcRef.current,
+      dualCore: dualCoreRef.current,
+      maxCycles: maxCyclesRef.current,
+    };
+    worker.postMessage(initSync);
+
+    return () => {
+      worker.terminate();
+      workerRef.current = null;
+    };
+  }, [resetLivePreview]);
+
+  // Live HID / Gamepad / Camera peripheral stream monitor
+  useEffect(() => {
+    const monitor = createPeripheralMonitor();
+    peripheralMonitorRef.current = monitor;
+    return () => {
+      monitor.destroy();
+      peripheralMonitorRef.current = null;
+    };
+  }, []);
+
+  // Async hardware enrichment + plug-and-play hot-plug listener (GPU / Gamepad / Media devices)
+  useEffect(() => {
+    let cancelled = false;
+    const refreshHardware = (initialProbe: boolean) => {
+      detectHardwareAsync().then((hw) => {
+        if (cancelled) return;
+        setDetectedHw(hw);
+        detectedHwRef.current = hw;
+        envRef.current.hwMask = hw.capabilityMask;
+        updateEnvPorts(envRef.current);
+        if (initialProbe && autoHardwareRef.current && generationRef.current === 0) {
+          applyHardwareProfile(hw, false);
+          setMaxCycles(hw.recommendedCycles);
+          maxCyclesRef.current = hw.recommendedCycles;
+        }
+      });
+    };
+
+    refreshHardware(true);
+    const unsubscribe = subscribeHardwareHotplug(() => refreshHardware(false));
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [applyHardwareProfile]);
+
+  const handleToggleCamera = useCallback(async () => {
+    const monitor = peripheralMonitorRef.current;
+    if (!monitor) return;
+    if (monitor.isCameraActive()) {
+      monitor.disableCamera();
+      setCameraActive(false);
+      setCameraStatus(null);
+      return;
+    }
+    setCameraStatus('Camera verbinden...');
+    const ok = await monitor.enableCamera();
+    if (ok) {
+      setCameraActive(true);
+      setCameraStatus(null);
+      if (taskIdRef.current !== 'hardware') {
+        setTaskId('hardware');
+        handleResetAll('hardware', popSize, fromScratch, bitWidth);
+      }
+    } else {
+      setCameraActive(false);
+      setCameraStatus('Geen camera beschikbaar of toegang geweigerd');
+    }
+  }, [bitWidth, fromScratch, handleResetAll, popSize]);
+
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (!worker) return;
+    const msg: WorkerRequest = {
+      type: 'updateParams',
+      taskId,
+      mutationRate,
+      bitWidth,
+      allowSmc,
+      inheritSmc,
+      dualCore,
+      maxCycles,
+    };
+    worker.postMessage(msg);
+  }, [taskId, mutationRate, bitWidth, allowSmc, inheritSmc, dualCore, maxCycles]);
+
+  useEffect(() => {
+    const worker = workerRef.current;
+    if (!worker) return;
+    if (isEvolving) {
+      worker.postMessage({ type: 'start', sessionId: sessionIdRef.current } satisfies WorkerRequest);
+    } else {
+      worker.postMessage({ type: 'stop' } satisfies WorkerRequest);
+    }
+  }, [isEvolving]);
 
   useEffect(() => {
     if (!isSimRunning || activeView !== 'workbench') return;
@@ -409,13 +780,15 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [isSimRunning, activeView, stepOneTick]);
 
-  // Throttled localStorage persistence (prevents JSON stringify overhead every 60ms)
+  // Throttled localStorage persistence (prevents JSON stringify overhead during fast worker ticks)
   useEffect(() => {
     const id = window.setTimeout(() => {
       try {
         const payload: SavedSession = {
           taskId,
           bitWidth,
+          maxCycles,
+          autoHardware,
           allowSmc,
           inheritSmc,
           dualCore,
@@ -430,6 +803,15 @@ export default function App() {
             fitness: a.fitness,
             generationBorn: a.generationBorn,
           })),
+          coPopulation: coPopulation
+            ? coPopulation.map((a) => ({
+                id: a.id,
+                genome: Array.from(a.genome),
+                fitness: a.fitness,
+                generationBorn: a.generationBorn,
+              }))
+            : null,
+          coBestFitness,
           metrics,
         };
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
@@ -438,7 +820,24 @@ export default function App() {
       }
     }, 500);
     return () => window.clearTimeout(id);
-  }, [taskId, bitWidth, allowSmc, inheritSmc, dualCore, popSize, mutationRate, fromScratch, generation, bestGenome, population, metrics]);
+  }, [
+    taskId,
+    bitWidth,
+    maxCycles,
+    autoHardware,
+    allowSmc,
+    inheritSmc,
+    dualCore,
+    popSize,
+    mutationRate,
+    fromScratch,
+    generation,
+    bestGenome,
+    population,
+    coPopulation,
+    coBestFitness,
+    metrics,
+  ]);
 
   const totalBytesPerAgent = 384;
   const totalPopulationKB = ((popSize * totalBytesPerAgent) / 1024).toFixed(1);
@@ -473,12 +872,21 @@ export default function App() {
     bestGenomeRef.current = updated;
     vmRef.current.activeCode = new Uint8Array(updated);
     vmRef.current.smcModified[idx] = 0;
+    let nextPop = populationRef.current;
     if (populationRef.current.length > 0) {
-      const nextPop = [...populationRef.current];
+      nextPop = [...populationRef.current];
       nextPop[0] = { ...nextPop[0], genome: new Uint8Array(updated) };
       populationRef.current = nextPop;
       setPopulation(nextPop);
     }
+    syncWorkerState(
+      nextPop,
+      coPopulationRef.current,
+      taskIdRef.current,
+      generationRef.current,
+      bitWidthRef.current,
+      dualCoreRef.current
+    );
     syncVmToState();
   };
 
@@ -556,12 +964,81 @@ export default function App() {
               </div>
             </div>
 
+            {/* Automatic Host Hardware Detection & Adaptive Space */}
+            <div className="border border-slate-800 rounded-md bg-[#0B0F19] p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-slate-200">
+                  Hardware-detectie
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (autoHardware) {
+                      setAutoHardware(false);
+                      autoHardwareRef.current = false;
+                    } else {
+                      detectHardwareAsync().then((hw) => {
+                        setDetectedHw(hw);
+                        applyHardwareProfile(hw, true);
+                      });
+                    }
+                  }}
+                  className={`px-2 py-0.5 text-[11px] font-mono font-semibold rounded border transition-colors ${
+                    autoHardware
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-[#080B12] border-slate-700 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  {autoHardware ? 'AUTO' : 'HANDMATIG'}
+                </button>
+              </div>
+              <div className="text-[11px] font-mono text-slate-300 leading-relaxed">
+                {detectedHw.summaryLine}
+              </div>
+              <div className="text-[11px] font-mono text-slate-400 leading-snug break-words">
+                {detectedHw.peripheralsLine}
+              </div>
+              <div className="text-[11px] text-slate-400 leading-snug">
+                AI-ruimte:{' '}
+                <span className="font-mono text-cyan-300">
+                  {bitWidth}b · {maxCycles} cycli/tick · {popSize} kernen
+                  {dualCore ? ' · Dual-Core' : ''}
+                </span>
+              </div>
+              <div className="pt-1 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleToggleCamera}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-medium rounded border transition-colors ${
+                    cameraActive
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                      : 'bg-[#080B12] border-slate-700 text-slate-300 hover:border-cyan-500/50 hover:text-cyan-200'
+                  }`}
+                >
+                  {cameraActive ? (
+                    <VideoOff className="w-3.5 h-3.5" />
+                  ) : (
+                    <Camera className="w-3.5 h-3.5 text-cyan-400" />
+                  )}
+                  {cameraActive ? 'Ontkoppel camera' : 'Koppel camera-oog'}
+                </button>
+                <span className="text-[10px] font-mono text-slate-500">
+                  P3 mask 0x{detectedHw.capabilityMask.toString(16).toUpperCase().padStart(2, '0')}
+                </span>
+              </div>
+              {cameraStatus && (
+                <div className="text-[11px] text-amber-300 leading-snug">
+                  {cameraStatus}
+                </div>
+              )}
+            </div>
+
             <div className="border-t border-slate-800 pt-4">
               <label className="block text-xs font-medium text-slate-300 mb-2">
                 1. Hardware-omgeving
               </label>
               <div className="space-y-1.5">
-                {(['homeostasis', 'arena', 'bitstream'] as TaskId[]).map((id) => (
+                {(['homeostasis', 'arena', 'bitstream', 'hardware'] as TaskId[]).map((id) => (
                   <button
                     key={id}
                     type="button"
@@ -595,6 +1072,8 @@ export default function App() {
                       key={w}
                       type="button"
                       onClick={() => {
+                        setAutoHardware(false);
+                        autoHardwareRef.current = false;
                         setBitWidth(w);
                         bitWidthRef.current = w;
                       }}
@@ -613,6 +1092,34 @@ export default function App() {
                   {bitWidth === 32 && '32-bit (EAX..EDI) · Pentium 3 profiel'}
                   {bitWidth === 64 && '64-bit (RAX..RDI) · modern x86-64'}
                   {bitWidth === 128 && '64-bit + 128-bit SSE2 XMM0..XMM3 SIMD'}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex justify-between text-xs mb-1.5">
+                  <span className="text-slate-300 font-medium">Cyclusbudget / tick</span>
+                  <span className="font-mono text-cyan-400">{maxCycles} cycli</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {([24, 36, 48] as CycleBudget[]).map((cy) => (
+                    <button
+                      key={cy}
+                      type="button"
+                      onClick={() => {
+                        setAutoHardware(false);
+                        autoHardwareRef.current = false;
+                        setMaxCycles(cy);
+                        maxCyclesRef.current = cy;
+                      }}
+                      className={`py-1.5 text-xs font-mono rounded border transition-colors ${
+                        maxCycles === cy
+                          ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                          : 'bg-[#0B0F19] border-slate-800 text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      {cy}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -654,15 +1161,17 @@ export default function App() {
 
               <div>
                 <div className="flex justify-between text-xs mb-1.5">
-                  <span className="text-slate-300 font-medium">Populatie (L1-cache)</span>
+                  <span className="text-slate-300 font-medium">Populatie (L1/L2-cache)</span>
                   <span className="font-mono text-slate-200">{popSize} kernen</span>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {[32, 64, 128].map((sz) => (
+                <div className="grid grid-cols-4 gap-1.5">
+                  {([32, 64, 128, 256] as PopSizeOption[]).map((sz) => (
                     <button
                       key={sz}
                       type="button"
                       onClick={() => {
+                        setAutoHardware(false);
+                        autoHardwareRef.current = false;
                         setPopSize(sz);
                         handleResetAll(taskId, sz, fromScratch, bitWidth);
                       }}
@@ -735,8 +1244,31 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     const next = !dualCore;
+                    setAutoHardware(false);
+                    autoHardwareRef.current = false;
                     setDualCore(next);
                     dualCoreRef.current = next;
+                    if (next && !coPopulationRef.current) {
+                      const newCoPop = initCoPopulation(
+                        popSize,
+                        Math.floor(Date.now() % 100000) + 8484,
+                        bitWidthRef.current
+                      );
+                      const firstCo = new Uint8Array(newCoPop[0].genome);
+                      setCoPopulation(newCoPop);
+                      coPopulationRef.current = newCoPop;
+                      setBestCoGenome(firstCo);
+                      bestCoGenomeRef.current = firstCo;
+                      vmBRef.current = createVMState(firstCo);
+                      syncWorkerState(
+                        populationRef.current,
+                        newCoPop,
+                        taskIdRef.current,
+                        generationRef.current,
+                        bitWidthRef.current,
+                        true
+                      );
+                    }
                   }}
                   className={`w-full flex items-center justify-between px-3 py-2 rounded-md border text-xs transition-colors ${
                     dualCore
@@ -832,6 +1364,18 @@ export default function App() {
                     </button>
                   </>
                 )}
+                {(taskId === 'bitstream' || taskId === 'hardware') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      pendingDisturbanceRef.current.loadSpike = 7;
+                    }}
+                    className="inline-flex items-center gap-2 px-3 py-2 text-xs bg-[#0B0F19] border border-slate-800 hover:border-cyan-500/50 text-slate-200 rounded-md transition-colors"
+                  >
+                    <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                    Injecteer bus-signaalpuls (+7)
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -885,7 +1429,7 @@ export default function App() {
                 <div className="text-[11px] uppercase tracking-wider text-slate-400">CPU-cycli / tick</div>
                 <div className="text-2xl font-mono font-semibold text-slate-100 mt-1">
                   {vmSnapshot.cyclesUsed}
-                  <span className="text-xs text-slate-400 ml-1">/ 24</span>
+                  <span className="text-xs text-slate-400 ml-1">/ {maxCycles}</span>
                 </div>
               </div>
               <div className="border border-slate-800 rounded-md bg-[#0B0F19] px-4 py-3">
@@ -1022,7 +1566,9 @@ export default function App() {
                       Gedeelde Multi-Core Bus (BUS0..BUS7)
                     </span>
                     <span className="text-[11px] font-mono text-slate-400">
-                      {dualCore ? 'Kern B → BUS → Kern A' : 'BWRITE / BREAD'}
+                      {dualCore
+                        ? `Kern B${coBestFitness !== null ? ` (${coBestFitness.toFixed(1)})` : ''} → BUS → Kern A`
+                        : 'BWRITE / BREAD'}
                     </span>
                   </div>
                   <div className="grid grid-cols-4 gap-px bg-slate-800/60">
@@ -1125,7 +1671,7 @@ export default function App() {
                     >
                       {[0, 1, 2, 3, 4, 5, 6, 7].map((r) => (
                         <option key={r} value={r}>
-                          R{r} / P{r % 6}
+                          R{r} / P{r}
                         </option>
                       ))}
                     </select>
@@ -1216,9 +1762,10 @@ export default function App() {
         <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
           <BenchmarkView
             genome={bestGenome}
-            coGenome={population[0]?.genome ?? null}
+            coGenome={bestCoGenome ?? coPopulation?.[0]?.genome ?? null}
             taskId={taskId}
             bitWidth={bitWidth}
+            maxCycles={maxCycles}
             generation={generation}
             allowSmc={allowSmc}
             inheritSmc={inheritSmc}
@@ -1234,6 +1781,8 @@ export default function App() {
             genome={bestGenome}
             taskId={taskId}
             bitWidth={bitWidth}
+            maxCycles={maxCycles}
+            popSize={popSize}
             generation={generation}
           />
         </main>
