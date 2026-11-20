@@ -1,0 +1,6 @@
+{
+  "name": "SiliciumKern",
+  "description": "Machinetaal-gedreven autonome AI-werkbank zonder VRAM of zware modellen.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
