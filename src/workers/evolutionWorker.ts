@@ -1,6 +1,7 @@
 import {
   Agent,
   BitWidth,
+  EnvSnapshot,
   GeneralizationResult,
   SmcAbResult,
   TaskId,
@@ -25,6 +26,8 @@ export interface WorkerSyncPayload {
   // Multi-worker ondersteuning: elke worker krijgt een sub-populatie
   workerIndex?: number;      // Index van deze worker (0-based)
   totalWorkers?: number;     // Totaal aantal workers in de pool
+  // Ecosystem: start evolutie vanaf huidige live-omgeving
+  initialEnv?: EnvSnapshot | null;
 }
 
 export interface WorkerUpdateParamsPayload {
@@ -108,6 +111,7 @@ let dualCore = false;
 let maxCycles = 24;
 let workerIndex = 0;         // Index van deze worker in de pool
 let totalWorkers = 1;        // Totaal aantal workers
+let initialEnv: EnvSnapshot | null = null;  // Ecosystem: start state for evolution
 
 let isRunning = false;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -128,6 +132,7 @@ function executeOneGeneration() {
     dualCore,
     coPopulation,
     maxCycles,
+    initialEnv,
   });
 
   population = res.nextPopulation;
@@ -175,6 +180,7 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       inheritSmc = msg.inheritSmc;
       dualCore = msg.dualCore;
       maxCycles = msg.maxCycles;
+      initialEnv = msg.initialEnv ?? null;
       // Multi-worker: extraheer sub-populatie voor deze worker
       workerIndex = msg.workerIndex ?? 0;
       totalWorkers = msg.totalWorkers ?? 1;

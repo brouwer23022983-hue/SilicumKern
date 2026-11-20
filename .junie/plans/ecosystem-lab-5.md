@@ -115,3 +115,31 @@ Nieuwe canvas renderer voor het ecosysteem en integratie in de hoofd-UI.
 - `App.tsx`: 'ecosystem' toevoegen aan task selector, EcosystemCanvas tonen bij ecosystem-taak ✓
 - `README.md`: ecosystem taak toevoegen aan changelog ✓
 - TypeScript compilatie verifiëren ✓
+
+### ✓ Step 3: MI-evolutie ladder — 6 stadia in plaats van 4-in-1 dispatcher
+Vervang het gebroken 4-in-1 dispatcher concept door een MI-evolutie ladder met 6 stadia. Elke fase traint één MI-stadium diep (300 generaties), en de kern behoudt wat hij leerde.
+- **Stadium 1 (Overleeft)**: Homeostasis in het huisje — kern leert temp/energy/queue in balans houden
+- **Stadium 2 (Perceert)**: Arena navigatie in het bos — kern leert sensoren lezen en naar doelen bewegen
+- **Stadium 3 (Denkt)**: Bitstream bij puzzelstenen — kern leert patronen herkennen en voorspellen
+- **Stadium 4 (Communiqueert)**: Hardware-bus bij de toren — kern leert I/O signalen interpreteren
+- **Stadium 5 (Zichzelf verbetert)**: SMC/PWRITE — kern leest en herschrijft zijn eigen code tijdens runtime
+- **Stadium 6 (Abstract denkt)**: CALL/RET — kern bouwt herbruikbare sub-routines
+- Nieuwe `ecoMiStage` veld in EnvSnapshot (0-5)
+- `ecoMiStage` wisselt automatisch na 300 generaties
+- EcosystemCanvas toont huidige MI-stadium met icoon en naam
+- App.tsx toont MI-stadium in header
+- README.md bijgewerkt met MI-evolutie ladder uitleg
+- TypeScript compilatie verifiëren ✓
+
+### ✓ Step 4: DNA-streng — beste cellen opslag en trainingsmodus keuze
+De MI-ladder is een DNA-streng: elk stadium is een cel, alleen de beste cel gaat door naar het volgende stadium.
+- **Trainingsmodus keuze**: UI-schakelaar "Één stadium" vs "Alle stadia" — gebruiker kiest of hij één stadium per keer traint OF alle stadia tegelijk
+- **DNA-streng opslag**: localStorage slaat de beste genome per stadium op (6 slots)
+- **DNA-streng visualisatie**: EcosystemCanvas toont de DNA-streng als 6 gekleurde segmenten — groen = voltooid, geel = actief, grijs = wachtend
+- **Beste cel selectie**: Na 300 generaties in een stadium wordt de beste genome opgeslagen en doorgegeven aan het volgende stadium als startpunt
+- **Stadium her-training**: Gebruiker kan één stadium selecteren en opnieuw trainen, de andere stadia blijven behouden
+- **App.tsx**: Nieuwe `miMode` state ('single' | 'all'), DNA-streng UI, stadium selectie knoppen
+- **machineVm.ts**: `saveMiStageGenome` en `loadMiStageGenome` functies
+- **EcosystemCanvas.tsx**: DNA-streng visualisatie in header
+- **README.md**: DNA-streng concept toegevoegd aan changelog
+- TypeScript compilatie verifiëren

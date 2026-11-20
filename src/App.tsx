@@ -27,8 +27,15 @@ import {
   TASKS,
   TaskId,
   VMState,
+  advanceEcoZoneEvolution,
+  advanceEcoMiStage,
+  MI_STAGES,
+  saveMiStageGenome,
+  loadMiStageGenome,
+  getDnaStrandStatus,
   createInitialEnv,
   createRandomGenome,
+  evaluateAgentDetailed,
   createRng,
   createStarterGenome,
   createVMState,
@@ -56,6 +63,42 @@ import type { WorkerRequest, WorkerResponse } from './workers/evolutionWorker';
 type ActiveView = 'workbench' | 'isa' | 'benchmark' | 'export';
 
 const STORAGE_KEY = 'siliciumkern_saved_state_v2';
+
+// The "Brain" — collects knowledge from all genomes and feeds it to the main avatar.
+// Each zone has its own best genome, learned independently by the population.
+// The brain reads these genomes and uses them to guide the main avatar,
+// but does NOT force the population to use them.
+const BRAIN_ZONE_KEYS: Record<string, string> = {
+  zone0: 'siliciumkern_brain_zone0',  // House (homeostasis)
+  zone1: 'siliciumkern_brain_zone1',  // Forest (arena)
+  zone2: 'siliciumkern_brain_zone2',  // Puzzle (bitstream)
+  zone3: 'siliciumkern_brain_zone3',  // Tower (hardware)
+};
+
+// Save the best genome for a specific zone in the brain
+function saveBrainZone(zone: number, genome: Uint8Array): void {
+  try {
+    const key = BRAIN_ZONE_KEYS[`zone${zone}`];
+    if (key) {
+      window.localStorage.setItem(key, JSON.stringify(Array.from(genome)));
+    }
+  } catch { /* ignore */ }
+}
+
+// Load the best genome for a specific zone from the brain
+function loadBrainZone(zone: number): Uint8Array | null {
+  try {
+    const key = BRAIN_ZONE_KEYS[`zone${zone}`];
+    if (!key) return null;
+    const raw = window.localStorage.getItem(key);
+    if (!raw) return null;
+    const arr = JSON.parse(raw) as number[];
+    if (!Array.isArray(arr) || arr.length !== PROG_LEN * 4) return null;
+    return new Uint8Array(arr);
+  } catch {
+    return null;
+  }
+}
 
 interface SavedAgent {
   id: number;
@@ -113,7 +156,10 @@ function initPopulation(
   const rng = createRng(seed);
   const agents: Agent[] = [];
   for (let i = 0; i < popSize; i++) {
-    const genome =
+    let genome: Uint8Array;
+    // Every agent is fully independent — own genome, own navigation, own strategy
+    // The dispatcher brain is only built for the main avatar, not the population
+    genome =
       fromScratch || i > 0
         ? createRandomGenome(rng, bitWidth, { dualCore, isCoCore: false })
         : createStarterGenome(taskId);
@@ -185,8 +231,14 @@ export default function App() {
 
   const [generation, setGeneration] = useState<number>(initialSaved?.generation ?? 0);
   const [isEvolving, setIsEvolving] = useState<boolean>(false);
-  const [isSimRunning, setIsSimRunning] = useState<boolean>(true);
+  const [isSimRunning, setIsSimRunning] = useState<boolean>(false);
   const [metrics, setMetrics] = useState<GenerationMetric[]>(initialSaved?.metrics ?? []);
+
+  // MI training mode: 'single' = train one stage at a time, 'all' = all stages together
+  const [miMode, setMiMode] = useState<'single' | 'all'>('all');
+  const miModeRef = useRef<'single' | 'all'>('all');
+  // DNA strand: which stages have completed genomes
+  const [dnaStrand, setDnaStrand] = useState<boolean[]>(() => getDnaStrandStatus());
 
   const initialFreshPop = useMemo(() => {
     if (initialSaved && Array.isArray(initialSaved.population) && initialSaved.population.length > 0) {
@@ -412,7 +464,8 @@ export default function App() {
       nextWidth: BitWidth,
       nextDualCore: boolean,
       stopEvolution: boolean = false,
-      nextCycles: CycleBudget = maxCyclesRef.current
+      nextCycles: CycleBudget = maxCyclesRef.current,
+      nextInitialEnv: EnvSnapshot | null = null
     ) => {
       const workers = workerRefs.current;
       if (workers.length === 0) return;
@@ -439,12 +492,17 @@ export default function App() {
           maxCycles: nextCycles,
           workerIndex: i,
           totalWorkers: workerCount,
+          initialEnv: nextInitialEnv,
         };
         workers[i].postMessage(syncMsg);
       }
     },
     []
   );
+
+  // Preserve ecosystem environment between task switches so the avatar
+  // keeps its position, day phase, and memory. Only reset on explicit restart.
+  const ecoEnvRef = useRef<EnvSnapshot | null>(null);
 
   const handleResetAll = useCallback(
     (
@@ -456,6 +514,7 @@ export default function App() {
       nextCycles: CycleBudget = maxCyclesRef.current
     ) => {
       setIsEvolving(false);
+      setIsSimRunning(false); // Pause live sim when switching tasks — avatar shouldn't move without user action
       const seed = Math.floor(Date.now() % 100000) + 313;
       const newPop = initPopulation(
         nextPopSize,
@@ -479,7 +538,50 @@ export default function App() {
       generationRef.current = 0;
       setMetrics([]);
       setSelectedInstIdx(null);
-      resetLivePreview(nextTask, newPop[0].genome, firstCo);
+
+      // For ecosystem: preserve the live environment state (position, day phase, memory)
+      // so the avatar continues from where it was. Only reset if switching FROM ecosystem
+      // to another task, then restore when switching back.
+      if (nextTask === 'ecosystem') {
+        // For ecosystem: always use the starter genome for live preview
+        // so the avatar navigates correctly even before evolution starts
+        const ecoStarter = createStarterGenome('ecosystem');
+        if (ecoEnvRef.current) {
+          // Restore preserved ecosystem environment
+          const preserved = ecoEnvRef.current;
+          envRef.current = preserved;
+          const freshVm = createVMState(ecoStarter);
+          vmRef.current = freshVm;
+          if (nextDualCore) {
+            const coKernel = firstCo ?? ecoStarter;
+            vmBRef.current = createVMState(coKernel);
+          }
+          setEnv({
+            ...preserved,
+            history: [...preserved.history],
+            trail: [...preserved.trail],
+            bitStreamHistory: [...preserved.bitStreamHistory],
+            ecoZoneScores: [...preserved.ecoZoneScores],
+            ecoZoneWeights: [...preserved.ecoZoneWeights],
+            ecoEnergyNodes: preserved.ecoEnergyNodes.map(n => ({ x: n.x, y: n.y })),
+            ecoHazards: preserved.ecoHazards.map(h => ({ x: h.x, y: h.y })),
+            ecoTrail: [...preserved.ecoTrail],
+            ecoMemoryShort: [...preserved.ecoMemoryShort],
+            ecoMemoryLong: [...preserved.ecoMemoryLong],
+          });
+          syncVmToState();
+        } else {
+          // First time: create fresh ecosystem env with starter genome
+          resetLivePreview(nextTask, ecoStarter, firstCo);
+        }
+      } else {
+        // Switching away from ecosystem: save the current ecosystem state
+        if (taskIdRef.current === 'ecosystem') {
+          ecoEnvRef.current = { ...envRef.current };
+        }
+        resetLivePreview(nextTask, newPop[0].genome, firstCo);
+      }
+
       syncWorkerState(
         newPop,
         newCoPop,
@@ -590,6 +692,14 @@ export default function App() {
       history: [...envRef.current.history],
       trail: [...envRef.current.trail],
       bitStreamHistory: [...envRef.current.bitStreamHistory],
+      // Deep copy ecosystem arrays so React detects changes
+      ecoZoneScores: [...envRef.current.ecoZoneScores],
+      ecoZoneWeights: [...envRef.current.ecoZoneWeights],
+      ecoEnergyNodes: envRef.current.ecoEnergyNodes.map(n => ({ x: n.x, y: n.y })),
+      ecoHazards: envRef.current.ecoHazards.map(h => ({ x: h.x, y: h.y })),
+      ecoTrail: [...envRef.current.ecoTrail],
+      ecoMemoryShort: [...envRef.current.ecoMemoryShort],
+      ecoMemoryLong: [...envRef.current.ecoMemoryLong],
     });
     syncVmToState();
   }, [taskId, resetLivePreview, syncVmToState]);
@@ -719,8 +829,34 @@ export default function App() {
             return updated.length > 120 ? updated.slice(updated.length - 120) : updated;
           });
 
-          if (!envRef.current.alive || bestChanged) {
-            resetLivePreview(taskIdRef.current, bestGenome, bestCoGenome);
+          // For ecosystem: advance zone-based evolution AND MI stage after each generation
+          if (taskIdRef.current === 'ecosystem') {
+            advanceEcoZoneEvolution(envRef.current);
+            const miSwitched = advanceEcoMiStage(envRef.current);
+            if (miSwitched) {
+              // MI stage switched — save the best genome of the previous stage to DNA strand
+              const prevStage = (envRef.current.ecoMiStage + 5) % 6; // stage we just left
+              saveMiStageGenome(prevStage, bestGenome);
+              // Update DNA strand status
+              setDnaStrand(getDnaStrandStatus());
+              // Update the UI to reflect the new stage
+              setEnv({ ...envRef.current });
+            }
+            if (!envRef.current.alive) {
+              resetLivePreview(taskIdRef.current, bestGenome, bestCoGenome);
+            } else {
+              // Hot-swap the genome: update VM code without resetting environment
+              const freshVm = createVMState(bestGenome);
+              vmRef.current = freshVm;
+              if (dualCoreRef.current) {
+                const coKernel = bestCoGenome ?? bestGenome;
+                vmBRef.current = createVMState(coKernel);
+              }
+            }
+          } else {
+            if (!envRef.current.alive || bestChanged) {
+              resetLivePreview(taskIdRef.current, bestGenome, bestCoGenome);
+            }
           }
 
           // Reset buffer voor volgende generatie
@@ -844,6 +980,22 @@ export default function App() {
     const workers = workerRefs.current;
     if (workers.length === 0) return;
     if (isEvolving) {
+      // When starting evolution, sync current live environment state so evolution
+      // continues from where the avatar currently is (position, day phase, memory)
+      const currentEnv = envRef.current;
+      syncWorkerState(
+        populationRef.current,
+        coPopulationRef.current,
+        taskIdRef.current,
+        generationRef.current,
+        bitWidthRef.current,
+        dualCoreRef.current,
+        false,
+        maxCyclesRef.current,
+        currentEnv.taskId === 'ecosystem' ? currentEnv : null
+      );
+      // Resume live simulation so avatar moves while evolving
+      setIsSimRunning(true);
       for (const w of workers) {
         w.postMessage({ type: 'start', sessionId: sessionIdRef.current } satisfies WorkerRequest);
       }
@@ -852,7 +1004,7 @@ export default function App() {
         w.postMessage({ type: 'stop' } satisfies WorkerRequest);
       }
     }
-  }, [isEvolving]);
+  }, [isEvolving, syncWorkerState]);
 
   useEffect(() => {
     if (!isSimRunning || activeView !== 'workbench') return;
@@ -897,6 +1049,34 @@ export default function App() {
           metrics,
         };
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        // The Brain: save the overall best genome per zone for ecosystem
+        // This is done lightly — only the top 10 agents are checked per zone
+        if (taskId === 'ecosystem') {
+          const topAgents = [...populationRef.current].sort((a, b) => b.fitness - a.fitness).slice(0, 10);
+          for (let z = 0; z < 4; z++) {
+            let bestZoneAgent: Agent | null = null;
+            let bestZoneFitness = -Infinity;
+            for (const agent of topAgents) {
+              try {
+                const testEnv = createInitialEnv('ecosystem', generationRef.current * 31 + z * 17 + 42, envRef.current.hwMask);
+                testEnv.agentX = z === 0 ? 4 : (z === 1 ? 20 : (z === 2 ? 4 : 20));
+                testEnv.agentY = z === 0 ? 4 : (z === 1 ? 4 : (z === 2 ? 20 : 20));
+                testEnv.ecoZone = z;
+                const result = evaluateAgentDetailed(agent.genome, 'ecosystem', generationRef.current * 31 + z * 17 + 42, 32, 6, {
+                  allowSmc: allowSmcRef.current,
+                  initialEnv: testEnv,
+                });
+                if (result.score > bestZoneFitness) {
+                  bestZoneFitness = result.score;
+                  bestZoneAgent = agent;
+                }
+              } catch { /* skip */ }
+            }
+            if (bestZoneAgent) {
+              saveBrainZone(z, bestZoneAgent.genome);
+            }
+          }
+        }
       } catch {
         // Ignore storage quota errors cleanly
       }
@@ -1364,6 +1544,118 @@ export default function App() {
               </div>
             </div>
 
+            {/* Ecosystem: DNA strand & MI training mode */}
+            {taskId === 'ecosystem' && (
+              <div className="border-t border-slate-800 pt-4 space-y-2.5">
+                <div className="text-xs font-medium text-slate-300">
+                  3.5 DNA-streng (MI-evolutie)
+                </div>
+                <p className="text-[11px] text-slate-400 leading-relaxed">
+                  Elke MI-stadium is een cel in de DNA-streng. Alleen de beste cel gaat door naar het volgende stadium.
+                </p>
+                {/* DNA strand visualization */}
+                <div className="flex gap-1">
+                  {MI_STAGES.map((stage, idx) => {
+                    const completed = dnaStrand[idx];
+                    const active = env.ecoMiStage === idx;
+                    return (
+                      <div
+                        key={idx}
+                        className={`flex-1 h-8 rounded flex items-center justify-center text-[10px] font-mono border transition-colors ${
+                          completed
+                            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+                            : active
+                              ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
+                              : 'bg-[#0B0F19] border-slate-800 text-slate-600'
+                        }`}
+                        title={`${stage.icon} ${stage.name}: ${stage.desc}`}
+                      >
+                        {stage.icon}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-1 text-[10px] font-mono text-slate-500">
+                  {MI_STAGES.map((stage, idx) => (
+                    <div key={idx} className="flex-1 text-center truncate" title={stage.name}>
+                      {stage.name.slice(0, 6)}
+                    </div>
+                  ))}
+                </div>
+                {/* Training mode selector */}
+                <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#080B12] border border-slate-800 rounded-md">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMiMode('all');
+                      miModeRef.current = 'all';
+                    }}
+                    className={`px-2.5 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+                      miMode === 'all'
+                        ? 'bg-slate-800 text-cyan-300'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Alle stadia tegelijk
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMiMode('single');
+                      miModeRef.current = 'single';
+                    }}
+                    className={`px-2.5 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap ${
+                      miMode === 'single'
+                        ? 'bg-slate-800 text-cyan-300'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    Één stadium per keer
+                  </button>
+                </div>
+                {/* Stage selector for single mode */}
+                {miMode === 'single' && (
+                  <div className="grid grid-cols-3 gap-1">
+                    {MI_STAGES.map((stage, idx) => {
+                      const completed = dnaStrand[idx];
+                      const active = env.ecoMiStage === idx;
+                      return (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => {
+                            // Set this stage as active
+                            envRef.current.ecoMiStage = idx;
+                            envRef.current.ecoMiStageGenerations = 0;
+                            // Load the previous stage's genome if available
+                            if (idx > 0) {
+                              const prevGenome = loadMiStageGenome(idx - 1);
+                              if (prevGenome) {
+                                setBestGenome(prevGenome);
+                                bestGenomeRef.current = prevGenome;
+                                vmRef.current = createVMState(prevGenome);
+                              }
+                            }
+                            setEnv({ ...envRef.current });
+                          }}
+                          className={`px-2 py-1.5 text-[11px] font-mono rounded border transition-colors ${
+                            active
+                              ? 'bg-yellow-500/20 border-yellow-500/40 text-yellow-300'
+                              : completed
+                                ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20'
+                                : 'bg-[#0B0F19] border-slate-800 text-slate-500 hover:text-slate-300'
+                          }`}
+                        >
+                          {stage.icon} {stage.name.slice(0, 8)}
+                          {completed && ' ✓'}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="border-t border-slate-800 pt-4 space-y-2.5">
               <div className="text-xs font-medium text-slate-300">
                 4. Uitvoering & stap-inspectie
@@ -1529,7 +1821,7 @@ export default function App() {
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-stretch">
               <div className="xl:col-span-7 min-h-[340px]">
                 {env.taskId === 'ecosystem' ? (
-                  <EcosystemCanvas env={env} />
+                  <EcosystemCanvas env={env} population={population.map(a => ({ genome: a.genome, fitness: a.fitness }))} />
                 ) : (
                   <ArenaCanvas env={env} />
                 )}

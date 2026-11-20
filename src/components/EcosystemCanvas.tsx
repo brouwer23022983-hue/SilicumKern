@@ -1,8 +1,9 @@
 import React, { useEffect, useRef } from 'react';
-import { EnvSnapshot, TASKS } from '../engine/machineVm';
+import { EnvSnapshot, TASKS, evaluateAgentDetailed, createInitialEnv, MI_STAGES } from '../engine/machineVm';
 
 interface EcosystemCanvasProps {
   env: EnvSnapshot;
+  population?: Array<{ genome: Uint8Array; fitness: number }>;
 }
 
 const GRID_SIZE = 24;
@@ -19,22 +20,90 @@ const ZONE_BORDER_COLORS = [
   '#F59E0B',  // Tower
 ];
 const ZONE_LABELS = ['🏠 Huisje', '🌲 Bos', '🪨 Puzzel', '📡 Toren'];
+const ZONE_TASKS = ['Homeostasis', 'Foraging', 'Bitstream', 'Hardware'];
 const DAY_PHASES = ['🌅 Ochtend', '☀️ Middag 1', '🌤️ Middag 2', '🌇 Avond', '🌙 Nacht'];
 const DAY_TARGET_ZONES = [3, 2, 1, 0, 0]; // toren, puzzel, bos, thuis, thuis
 
-export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
+function getZoneFromPos(x: number, y: number): number {
+  if (x < 8 && y < 8) return 0;       // House
+  if (x >= 16 && y < 8) return 1;     // Forest
+  if (x < 8 && y >= 16) return 2;     // Puzzle
+  if (x >= 16 && y >= 16) return 3;   // Tower
+  return -1; // transition
+}
+
+const AGENT_COLORS = ['#3B82F6', '#10B981', '#A855F7', '#F59E0B']; // per zone
+
+// Simple deterministic RNG for agent positions
+function simpleRng(seed: number): () => number {
+  let s = seed;
+  return () => {
+    s = (s * 1664525 + 1013904223) & 0x7fffffff;
+    return s / 0x7fffffff;
+  };
+}
+
+export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env, population }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
+    // Compute agent positions — each agent runs independently from a random starting position
+    const agentPositions: Array<{ x: number; y: number; fitness: number; zone: number }> = [];
+    if (population && population.length > 0) {
+      // Show top 50 agents by fitness
+      const topAgents = [...population].sort((a, b) => b.fitness - a.fitness).slice(0, 50);
+
+      for (let idx = 0; idx < topAgents.length; idx++) {
+        const agent = topAgents[idx];
+        try {
+          // Each agent starts from a RANDOM position — this is how they explore independently
+          const rng = simpleRng(idx * 7919 + 104729);
+          const startX = Math.floor(rng() * GRID_SIZE);
+          const startY = Math.floor(rng() * GRID_SIZE);
+
+          // Create a fresh environment for this agent
+          const agentEnv = createInitialEnv('ecosystem', idx * 7919 + 104729, env.hwMask);
+          agentEnv.agentX = startX;
+          agentEnv.agentY = startY;
+          agentEnv.ecoZone = getZoneFromPos(startX, startY);
+          agentEnv.ecoDayPhase = env.ecoDayPhase;
+          agentEnv.ecoDayProgress = env.ecoDayProgress;
+          agentEnv.ecoEnergyNodes = env.ecoEnergyNodes.map(n => ({ x: n.x, y: n.y }));
+          agentEnv.ecoHazards = env.ecoHazards.map(h => ({ x: h.x, y: h.y }));
+          agentEnv.ecoHouseX = env.ecoHouseX;
+          agentEnv.ecoHouseY = env.ecoHouseY;
+
+          // Run the agent for a few ticks to see where it navigates
+          const agentSeed = idx * 7919 + 104729;
+          evaluateAgentDetailed(agent.genome, 'ecosystem', agentSeed, 32, 3, {
+            allowSmc: true,
+            initialEnv: agentEnv,
+          });
+          const zone = getZoneFromPos(agentEnv.agentX, agentEnv.agentY);
+          agentPositions.push({
+            x: agentEnv.agentX,
+            y: agentEnv.agentY,
+            fitness: agent.fitness,
+            zone,
+          });
+        } catch {
+          // Agent failed to evaluate — skip it
+        }
+      }
+    }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
+    // Use parent container size if canvas has no dimensions yet
+    const parent = canvas.parentElement;
+    const parentW = parent ? parent.clientWidth : 400;
+    const parentH = parent ? parent.clientHeight : 320;
     const rect = canvas.getBoundingClientRect();
-    const w = Math.max(300, Math.floor(rect.width));
-    const h = Math.max(280, Math.floor(rect.height));
+    const w = Math.max(300, Math.floor(rect.width || parentW));
+    const h = Math.max(280, Math.floor(rect.height || parentH));
 
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) {
       canvas.width = w * dpr;
@@ -49,7 +118,7 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
     ctx.fillRect(0, 0, w, h);
 
     const pad = 20;
-    const size = Math.min(w - pad * 2, h - pad * 2);
+    const size = Math.max(1, Math.min(w - pad * 2, h - pad * 2));
     const ox = Math.floor((w - size) / 2);
     const oy = Math.floor((h - size) / 2);
     const cell = size / GRID_SIZE;
@@ -171,10 +240,32 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
       ctx.stroke();
     }
 
-    // Avatar as a simple cube (pseudo-3D)
+    // Draw all population agents as colored dots
+    if (agentPositions.length > 0) {
+      const dotSize = Math.max(2, Math.min(4, cell * 0.3));
+      for (const ap of agentPositions) {
+        const dx = ox + (ap.x + 0.5) * cell;
+        const dy = oy + (ap.y + 0.5) * cell;
+        const color = ap.zone >= 0 ? AGENT_COLORS[ap.zone] : '#64748B';
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.7;
+        ctx.beginPath();
+        ctx.arc(dx, dy, dotSize, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1.0;
+    }
+
+    // Draw main avatar (best agent) as a highlighted cube
     const ax = ox + (env.agentX + 0.5) * cell;
     const ay = oy + (env.agentY + 0.5) * cell;
     const as = cell * 0.35;
+
+    // Glow effect
+    ctx.fillStyle = 'rgba(6, 182, 212, 0.3)';
+    ctx.beginPath();
+    ctx.arc(ax, ay, as * 1.5, 0, Math.PI * 2);
+    ctx.fill();
 
     // Cube top face
     ctx.fillStyle = '#06B6D4';
@@ -219,28 +310,66 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
     ctx.closePath();
     ctx.stroke();
 
+    // Population count info
+    if (agentPositions.length > 0) {
+      ctx.font = '10px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#64748B';
+      const popLabel = `👥 ${agentPositions.length} agents`;
+      ctx.fillText(popLabel, ox + 4, oy + size - 6);
+    }
+
     // Border frame
     ctx.strokeStyle = '#334155';
     ctx.lineWidth = 1;
     ctx.strokeRect(ox, oy, size, size);
 
-    // Target zone highlight (dag/nacht cyclus)
+    // Evolution zone highlight — the active training zone gets a thick border
+    const evoZone = env.ecoEvolutionZone ?? 3;
+    const evoZones = [
+      { x1: 0, y1: 0, x2: 8, y2: 8 },
+      { x1: 16, y1: 0, x2: 24, y2: 8 },
+      { x1: 0, y1: 16, x2: 8, y2: 24 },
+      { x1: 16, y1: 16, x2: 24, y2: 24 },
+    ];
+    if (evoZone >= 0 && evoZone < 4) {
+      const ez = evoZones[evoZone];
+      const ezx = ox + ez.x1 * cell;
+      const ezy = oy + ez.y1 * cell;
+      const ezw = (ez.x2 - ez.x1) * cell;
+      const ezh = (ez.y2 - ez.y1) * cell;
+      ctx.strokeStyle = ZONE_BORDER_COLORS[evoZone];
+      ctx.lineWidth = 4;
+      ctx.strokeRect(ezx - 2, ezy - 2, ezw + 4, ezh + 4);
+      // Dim non-active zones
+      for (const z of zones) {
+        if (z.idx !== evoZone) {
+          const zx = ox + z.x1 * cell;
+          const zy = oy + z.y1 * cell;
+          const zw = (z.x2 - z.x1) * cell;
+          const zh = (z.y2 - z.y1) * cell;
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
+          ctx.fillRect(zx, zy, zw, zh);
+        }
+      }
+    }
+
+    // Target zone highlight (dag/nacht cyclus) — only if different from evolution zone
     const dayPhase = env.ecoDayPhase ?? 0;
     const targetZone = env.ecoTargetZone ?? DAY_TARGET_ZONES[dayPhase];
-    const targetZones = [
-      { x1: 0, y1: 0, x2: 8, y2: 8 },       // House
-      { x1: 16, y1: 0, x2: 24, y2: 8 },     // Forest
-      { x1: 0, y1: 16, x2: 8, y2: 24 },     // Puzzle
-      { x1: 16, y1: 16, x2: 24, y2: 24 },   // Tower
-    ];
-    if (targetZone >= 0 && targetZone < 4) {
+    if (targetZone !== evoZone && targetZone >= 0 && targetZone < 4) {
+      const targetZones = [
+        { x1: 0, y1: 0, x2: 8, y2: 8 },
+        { x1: 16, y1: 0, x2: 24, y2: 8 },
+        { x1: 0, y1: 16, x2: 8, y2: 24 },
+        { x1: 16, y1: 16, x2: 24, y2: 24 },
+      ];
       const tz = targetZones[targetZone];
       const tzx = ox + tz.x1 * cell;
       const tzy = oy + tz.y1 * cell;
       const tzw = (tz.x2 - tz.x1) * cell;
       const tzh = (tz.y2 - tz.y1) * cell;
-      ctx.strokeStyle = 'rgba(250, 204, 21, 0.6)'; // gele rand voor target
-      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(250, 204, 21, 0.4)';
+      ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
       ctx.strokeRect(tzx, tzy, tzw, tzh);
       ctx.setLineDash([]);
@@ -305,6 +434,42 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
           </span>
         </div>
         <div className="flex items-center gap-4 text-xs font-mono shrink-0">
+          {/* DNA strand visualization */}
+          <div className="flex gap-0.5">
+            {MI_STAGES.map((stage, idx) => {
+              const active = env.ecoMiStage === idx;
+              return (
+                <div
+                  key={idx}
+                  className={`w-4 h-4 rounded-sm flex items-center justify-center text-[8px] border transition-colors ${
+                    active
+                      ? 'bg-yellow-500/30 border-yellow-500/60 text-yellow-300'
+                      : 'bg-[#0B0F19] border-slate-700 text-slate-600'
+                  }`}
+                  title={`${stage.icon} ${stage.name}: ${stage.desc}`}
+                >
+                  {stage.icon}
+                </div>
+              );
+            })}
+          </div>
+          {/* MI Stage progress */}
+          {env.ecoMiStage !== undefined && (
+            <span className="font-bold text-cyan-400">
+              {MI_STAGES[env.ecoMiStage]?.icon} {MI_STAGES[env.ecoMiStage]?.name}
+            </span>
+          )}
+          {env.ecoMiStageGenerations !== undefined && env.ecoMiStageGenTarget !== undefined && (
+            <span className="text-yellow-400">
+              Gen {env.ecoMiStageGenerations}/{env.ecoMiStageGenTarget}
+            </span>
+          )}
+          {/* Zone evolution progress */}
+          {env.ecoEvolutionZone !== undefined && (
+            <span className={`font-bold ${ZONE_BORDER_COLORS[env.ecoEvolutionZone] ? `text-[${ZONE_BORDER_COLORS[env.ecoEvolutionZone]}]` : 'text-cyan-400'}`}>
+              ▶ {ZONE_LABELS[env.ecoEvolutionZone]} ({ZONE_TASKS[env.ecoEvolutionZone]})
+            </span>
+          )}
           <span className="text-cyan-400">Pos ({env.agentX},{env.agentY})</span>
           <span className="text-emerald-400">Energie {Math.round(env.energy)}%</span>
           <span className="text-amber-400">Bronnen {env.ecoNodesCollected ?? 0}</span>

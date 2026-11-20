@@ -215,6 +215,50 @@ De repository bouwt schoon met standaard Vite (`npm run build` → output in `di
 - **Sensor-updates**: P5 geeft nu dag-fase (0-4) + progress, P6 geeft zone-ID + slaap-status (bit 3), P7 geeft huisje-richting + geheugen-grootte (bits 4-7).
 - **EcosystemCanvas updates**: Dag-fase indicator (🌅☀️🌤️🌇🌙), target zone highlight (gele gestippelde rand), slaap-indicator (💤 Slaapt...), geheugen-info (🧠 Kort: X/8 Lang: X/8) en dagen-getal.
 
+### Versie 2.4 — DNA-streng & trainingsmodus keuze (2026-11-20)
+
+**Nieuw: DNA-streng concept** — de MI-ladder is een DNA-streng: elk stadium is een cel, en alleen de beste cel gaat door naar het volgende stadium.
+
+**Hoe het werkt:**
+- **Trainingsmodus keuze**: Schakelaar "Alle stadia tegelijk" vs "Één stadium per keer" — de gebruiker kiest hoe hij traint
+- **DNA-streng opslag**: localStorage slaat de beste genome per MI-stadium op (6 slots). Na 300 generaties in een stadium wordt de beste genome automatisch opgeslagen.
+- **DNA-streng visualisatie**: 6 gekleurde segmenten in de header — 💚 groen = voltooid, 💛 geel = actief, ⬛ grijs = wachtend
+- **Stadium her-training**: In "één stadium" modus kan de gebruiker elk stadium selecteren en opnieuw trainen. De andere stadia blijven behouden.
+- **Vorige stadium als startpunt**: Bij "één stadium" modus laadt de vorige stadium's genome als startpunt, zodat de kern bouwt op wat hij al leerde
+
+**machineVm.ts:**
+- `saveMiStageGenome(stage, genome)` — slaat de beste genome voor een MI-stadium op
+- `loadMiStageGenome(stage)` — laadt de opgeslagen genome van een MI-stadium
+- `getDnaStrandStatus()` — geeft aan welke stadia voltooid zijn
+
+**App.tsx:**
+- Nieuwe `miMode` state ('single' | 'all') met UI-schakelaar
+- DNA-streng visualisatie in linker paneel (alleen bij ecosystem)
+- Stadium-selectie knoppen in "één stadium" modus
+
+**EcosystemCanvas.tsx:**
+- DNA-streng als 6 kleine icoontjes in de header
+
+### Versie 2.3 — MI-evolutie ladder (2026-11-20)
+
+**Nieuw: Machine Intelligence-evolutie ladder** — vervangt het gebroken 4-in-1 dispatcher concept door 6 stadia van Machine Intelligence. Elke fase traint één stadium diep (300 generaties), en de kern behoudt wat hij leerde.
+
+| Stadium | Naam | Icon | Omschrijving | Zone |
+|---|---|---|---|---|
+| 0 | Overleeft | 💓 | Homeostasis — kern leert temp/energy/queue in balans houden | 🏠 Huisje |
+| 1 | Perceert | 👁️ | Sensoren — kern leert waarnemen en navigeren | 🌲 Bos |
+| 2 | Denkt | 🧠 | Patronen — kern leert shift-XOR patronen voorspellen | 🪨 Puzzel |
+| 3 | Communiqueert | 📡 | Bus I/O — kern leert hardware-signalen interpreteren | 📡 Toren |
+| 4 | Zichzelf verbetert | 🔧 | SMC — kern leest en herschrijft zijn eigen code (PWRITE) | Alle zones |
+| 5 | Abstract denkt | 📐 | Sub-routines — kern bouwt herbruikbare gedrag-blokken (CALL/RET) | Alle zones |
+
+**Hoe het werkt:**
+- `ecoMiStage` telt van 0 naar 5, automatisch wisselend na 300 generaties
+- Stadia 0-3 koppelen aan zones (huisje, bos, puzzel, toren)
+- Stadia 4-5 zijn zone-onafhankelijk — de kern past zich overal aan
+- Na stadium 5 start de cyclus opnieuw (stadium 0), maar met meer kennis
+- EcosystemCanvas toont het huidige stadium met icoon en naam in de header
+
 ### Versie 2.1 — Ecosysteem Lab (2026-11-20)
 
 **Nieuw:**
