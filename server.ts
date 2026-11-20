@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 const execFileAsync = promisify(execFile);
 
 const PORT = Number(process.env.PORT || 3000);
+const INTELLIDE_PORT = Number(process.env.INTELLIDE_PORT || 25565);
 const PROJECT_ROOT = process.cwd();
 const GITHUB_REPO = 'brouwer23022983-hue/SilicumKern';
 const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
@@ -26,6 +27,8 @@ interface SyncFileFingerprint {
 
 interface IntelliIDEStatus {
   running: boolean;
+  preferredPort: number;
+  liveUrl: string;
   builtInServerActive: boolean;
   builtInServerPort: number | null;
   builtInServerInfo: Record<string, unknown> | null;
@@ -65,31 +68,41 @@ function isCloudContainerEnv(): boolean {
   return false;
 }
 
-async function probeJetBrainsBuiltInServer(): Promise<{
+async function probeJetBrainsBuiltInServer(
+  preferredPort: number = INTELLIDE_PORT
+): Promise<{
   active: boolean;
   port: number | null;
   info: Record<string, unknown> | null;
 }> {
-  for (const port of [63342, 63343]) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 500);
-      const res = await fetch(`http://127.0.0.1:${port}/api/about`, {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      });
-      clearTimeout(timer);
-      if (res.ok) {
-        let info: Record<string, unknown> | null = null;
-        try {
-          info = (await res.json()) as Record<string, unknown>;
-        } catch {
-          info = { status: res.status };
+  const ports = Array.from(new Set([preferredPort, 25565, 63342, 63343]));
+  for (const port of ports) {
+    for (const endpoint of ['/api/about', '/']) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 500);
+        const res = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json,text/html,*/*' },
+        });
+        clearTimeout(timer);
+        if (res.status > 0 && res.status < 500) {
+          let info: Record<string, unknown> | null = null;
+          const ct = res.headers.get('content-type') || '';
+          if (ct.includes('application/json')) {
+            try {
+              info = (await res.json()) as Record<string, unknown>;
+            } catch {
+              info = { status: res.status, endpoint };
+            }
+          } else {
+            info = { status: res.status, endpoint };
+          }
+          return { active: true, port, info };
         }
-        return { active: true, port, info };
+      } catch {
+        // Port/endpoint not listening
       }
-    } catch {
-      // Port not listening
     }
   }
   return { active: false, port: null, info: null };
@@ -200,9 +213,11 @@ async function findIntelliJExecutable(): Promise<string | null> {
   return null;
 }
 
-async function getIntelliIDEStatus(): Promise<IntelliIDEStatus> {
+async function getIntelliIDEStatus(
+  preferredPort: number = INTELLIDE_PORT
+): Promise<IntelliIDEStatus> {
   const [builtIn, proc, executablePath] = await Promise.all([
-    probeJetBrainsBuiltInServer(),
+    probeJetBrainsBuiltInServer(preferredPort),
     detectIntelliJProcess(),
     findIntelliJExecutable(),
   ]);
@@ -220,8 +235,11 @@ async function getIntelliIDEStatus(): Promise<IntelliIDEStatus> {
   if (!projectName || projectName === 'applet') {
     projectName = 'SilicumKern';
   }
+  const activePort = builtIn.port ?? preferredPort;
   return {
     running: builtIn.active || proc.detected,
+    preferredPort,
+    liveUrl: `http://localhost:${activePort}`,
     builtInServerActive: builtIn.active,
     builtInServerPort: builtIn.port,
     builtInServerInfo: builtIn.info,
@@ -445,8 +463,10 @@ async function createServer() {
     next();
   });
 
-  app.get('/api/intelliide/status', async (_req: Request, res: Response) => {
-    const status = await getIntelliIDEStatus();
+  app.get('/api/intelliide/status', async (req: Request, res: Response) => {
+    const rawPort = Number(req.query.port);
+    const port = Number.isInteger(rawPort) && rawPort > 0 && rawPort <= 65535 ? rawPort : INTELLIDE_PORT;
+    const status = await getIntelliIDEStatus(port);
     res.json(status);
   });
 
@@ -677,7 +697,7 @@ async function createServer() {
         'if command -v idea >/dev/null 2>&1 && ! pgrep -f "intellij|idea" >/dev/null 2>&1; then',
         '  nohup idea . >/dev/null 2>&1 &',
         'fi',
-        'echo "[SiliciumKern Sync] Check server: http://localhost:3000/api/sync/status"',
+        'echo "[SiliciumKern Sync] Check server: http://localhost:3000 · IntelliIDE: http://localhost:25565"',
       ].join('\n');
       res.setHeader('Content-Type', 'text/x-shellscript; charset=utf-8');
       res.setHeader('Content-Disposition', 'attachment; filename="sync-siliciumkern.sh"');
@@ -706,7 +726,7 @@ async function createServer() {
       '  $ideaCmd = Get-Command "idea64.exe","idea.cmd","idea" -ErrorAction SilentlyContinue | Select-Object -First 1',
       '  if ($ideaCmd) { Start-Process $ideaCmd.Source -ArgumentList "." }',
       '}',
-      'Write-Host "[SiliciumKern Sync] Lokale server: http://localhost:3000" -ForegroundColor Yellow',
+      'Write-Host "[SiliciumKern Sync] Lokale server: http://localhost:3000 · IntelliIDE poort: 25565" -ForegroundColor Yellow',
     ].join('\r\n');
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="sync-siliciumkern.ps1"');

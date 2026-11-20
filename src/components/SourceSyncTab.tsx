@@ -255,13 +255,35 @@ export const SourceSyncTab: React.FC = () => {
           <div className="text-slate-300">
             Lokale Host PC eindpunt voor directe vergelijking vanuit AI Studio:
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setHostPcUrl('http://localhost:25565')}
+              className={`px-2.5 py-1 rounded text-xs font-mono border ${
+                hostPcUrl === 'http://localhost:25565'
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : 'bg-[#080B12] border-slate-700 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              :25565
+            </button>
+            <button
+              type="button"
+              onClick={() => setHostPcUrl('http://localhost:3000')}
+              className={`px-2.5 py-1 rounded text-xs font-mono border ${
+                hostPcUrl === 'http://localhost:3000'
+                  ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-300'
+                  : 'bg-[#080B12] border-slate-700 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              :3000
+            </button>
             <input
               type="text"
               value={hostPcUrl}
               onChange={(e) => setHostPcUrl(e.target.value)}
               className="w-60 bg-[#080B12] border border-slate-700 rounded px-2.5 py-1 font-mono text-xs text-slate-100"
-              placeholder="http://localhost:3000"
+              placeholder="http://localhost:25565"
             />
             <button
               type="button"
