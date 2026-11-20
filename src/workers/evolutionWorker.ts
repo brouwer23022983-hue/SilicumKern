@@ -1,9 +1,11 @@
 import {
   Agent,
   BitWidth,
+  EnvSnapshot,
   GeneralizationResult,
   SmcAbResult,
   TaskId,
+  createStarterGenome,
   evolveGeneration,
   runGeneralizationBenchmark,
   runSmcAbExperiment,
@@ -22,6 +24,11 @@ export interface WorkerSyncPayload {
   inheritSmc: boolean;
   dualCore: boolean;
   maxCycles: number;
+  // Multi-worker ondersteuning: elke worker krijgt een sub-populatie
+  workerIndex?: number;      // Index van deze worker (0-based)
+  totalWorkers?: number;     // Totaal aantal workers in de pool
+  // Ecosystem: start evolutie vanaf huidige live-omgeving
+  initialEnv?: EnvSnapshot | null;
 }
 
 export interface WorkerUpdateParamsPayload {
@@ -103,6 +110,9 @@ let allowSmc = true;
 let inheritSmc = false;
 let dualCore = false;
 let maxCycles = 24;
+let workerIndex = 0;         // Index van deze worker in de pool
+let totalWorkers = 1;        // Totaal aantal workers
+let initialEnv: EnvSnapshot | null = null;  // Ecosystem: start state for evolution
 
 let isRunning = false;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -123,6 +133,7 @@ function executeOneGeneration() {
     dualCore,
     coPopulation,
     maxCycles,
+    initialEnv,
   });
 
   population = res.nextPopulation;
@@ -162,16 +173,6 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
   switch (msg.type) {
     case 'sync': {
       activeSessionId = msg.sessionId;
-      population = msg.population.map((a) => ({
-        ...a,
-        genome: new Uint8Array(a.genome),
-      }));
-      coPopulation = msg.coPopulation
-        ? msg.coPopulation.map((a) => ({
-            ...a,
-            genome: new Uint8Array(a.genome),
-          }))
-        : null;
       taskId = msg.taskId;
       generation = msg.generation;
       mutationRate = msg.mutationRate;
@@ -180,6 +181,29 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       inheritSmc = msg.inheritSmc;
       dualCore = msg.dualCore;
       maxCycles = msg.maxCycles;
+      initialEnv = msg.initialEnv ?? null;
+      // Multi-worker: extraheer sub-populatie voor deze worker
+      workerIndex = msg.workerIndex ?? 0;
+      totalWorkers = msg.totalWorkers ?? 1;
+      const allPop = msg.population.map((a) => ({
+        ...a,
+        genome: new Uint8Array(a.genome),
+      }));
+      const allCoPop = msg.coPopulation
+        ? msg.coPopulation.map((a) => ({
+            ...a,
+            genome: new Uint8Array(a.genome),
+          }))
+        : null;
+      // Verdeel populatie over workers: elke worker krijgt zijn eigen slice
+      const popPerWorker = Math.ceil(allPop.length / totalWorkers);
+      const popStart = workerIndex * popPerWorker;
+      const popEnd = Math.min(popStart + popPerWorker, allPop.length);
+      population = allPop.slice(popStart, popEnd);
+      const coPerWorker = allCoPop ? Math.ceil(allCoPop.length / totalWorkers) : 0;
+      const coStart = workerIndex * coPerWorker;
+      const coEnd = Math.min(coStart + coPerWorker, allCoPop?.length ?? 0);
+      coPopulation = allCoPop ? allCoPop.slice(coStart, coEnd) : null;
       break;
     }
     case 'updateParams': {

@@ -23,6 +23,7 @@ export interface DetectedHardware {
   recommendedPopSize: PopSizeOption;
   recommendedDualCore: boolean;
   recommendedCycles: CycleBudget;
+  recommendedWorkerCount: number; // Aantal Web Workers voor parallelle evolutie (alle beschikbare threads)
   summaryLine: string;
   peripheralsLine: string;
 }
@@ -201,6 +202,7 @@ function computeRecommendations(params: {
   recommendedPopSize: PopSizeOption;
   recommendedDualCore: boolean;
   recommendedCycles: CycleBudget;
+  recommendedWorkerCount: number;
 } {
   const { bitness, logicalCores, deviceMemoryGb, hasWasmSimd, hasGpuCompute } = params;
 
@@ -225,11 +227,15 @@ function computeRecommendations(params: {
     recommendedCycles = 36;
   }
 
+  // Parallelle evolutie: gebruik alle beschikbare threads
+  const recommendedWorkerCount = Math.max(1, logicalCores);
+
   return {
     recommendedBitWidth,
     recommendedPopSize,
     recommendedDualCore,
     recommendedCycles,
+    recommendedWorkerCount,
   };
 }
 
@@ -259,6 +265,9 @@ export function detectHardwareSync(): DetectedHardware {
     NavigatorHardwareExtended;
   const { arch, bitness } = inferArchFromUa();
   const logicalCores = Math.max(1, Number(nav.hardwareConcurrency) || 4);
+  // navigator.deviceMemory is een browser API die vaak minder toont dan het echte RAM
+  // (browsers ronden af naar 0.25, 0.5, 1, 2, 4, 8 GB en tonen max ~8GB zelfs bij meer RAM)
+  // Dit is een browser-beperking, niet een bug in onze code
   const deviceMemoryGb = typeof nav.deviceMemory === 'number' ? nav.deviceMemory : null;
   const hasWasmSimd = checkWasmSimdSupport();
   const hasSharedMemory = typeof SharedArrayBuffer !== 'undefined';

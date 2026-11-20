@@ -7,13 +7,17 @@ interface InstructionSetViewProps {
 }
 
 const CATEGORY_LABELS: Array<{ id: OpcodeCategory | 'all'; label: string }> = [
-  { id: 'all', label: 'Alle 44' },
+  { id: 'all', label: 'Alle 256' },
   { id: 'data', label: 'Data' },
   { id: 'alu', label: 'ALU Rekenen' },
   { id: 'bit', label: 'Bitwise' },
   { id: 'flow', label: 'Vlaggen & Sprongen' },
   { id: 'mem', label: 'Geheugen' },
   { id: 'simd', label: '128-bit SIMD' },
+  { id: 'simd_mmx', label: 'MMX (Pentium MMX)' },
+  { id: 'simd_sse', label: 'SSE (Pentium III)' },
+  { id: 'simd_sse2', label: 'SSE2 (Pentium 4)' },
+  { id: 'simd_sse3', label: 'SSE3 (Pentium 4 HT)' },
   { id: 'io', label: 'Hardware I/O' },
   { id: 'smc', label: 'SMC & Multi-Core Bus' },
 ];
@@ -35,7 +39,7 @@ export const InstructionSetView: React.FC<InstructionSetViewProps> = ({ taskId, 
                 Volledige Instructieset ({OPCODE_TABLE.length} opcodes · 16 / 32 / 64 / 128-bit)
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Vorm: [Byte 0: Opcode 0x00..0x2B] [Byte 1: Rd/Xd] [Byte 2: Rs/Xs/Poort] [Byte 3: Imm8 / @Addr]
+                Vorm: [Byte 0: Opcode 0x00..0xFF] [Byte 1: Rd/Xd] [Byte 2: Rs/Xs/Poort] [Byte 3: Imm8 / @Addr]
               </p>
             </div>
             <span className="text-xs font-mono text-cyan-400">
@@ -97,12 +101,12 @@ export const InstructionSetView: React.FC<InstructionSetViewProps> = ({ taskId, 
           </p>
           <dl className="mt-4 space-y-3 text-xs">
             <div className="flex justify-between py-1.5 border-b border-slate-800/70">
-              <dt className="text-slate-400">Programmageheugen (32 × 4B)</dt>
-              <dd className="font-mono text-slate-100">128 bytes</dd>
+              <dt className="text-slate-400">Programmageheugen (64 × 4B)</dt>
+              <dd className="font-mono text-slate-100">256 bytes</dd>
             </div>
             <div className="flex justify-between py-1.5 border-b border-slate-800/70">
-              <dt className="text-slate-400">L1 Scratchpad RAM (16 × 64-bit)</dt>
-              <dd className="font-mono text-slate-100">128 bytes</dd>
+              <dt className="text-slate-400">L1 Scratchpad RAM (32 × 64-bit)</dt>
+              <dd className="font-mono text-slate-100">256 bytes</dd>
             </div>
             <div className="flex justify-between py-1.5 border-b border-slate-800/70">
               <dt className="text-slate-400">Scalair R0..R7 (16/32/64-bit)</dt>
@@ -114,7 +118,7 @@ export const InstructionSetView: React.FC<InstructionSetViewProps> = ({ taskId, 
             </div>
             <div className="flex justify-between py-1.5">
               <dt className="text-slate-200 font-medium">Totaal per autonome kern</dt>
-              <dd className="font-mono font-semibold text-cyan-400">384 bytes</dd>
+              <dd className="font-mono font-semibold text-cyan-400">640 bytes</dd>
             </div>
           </dl>
         </div>
