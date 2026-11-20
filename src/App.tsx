@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import { ArenaCanvas } from './components/ArenaCanvas';
 import { EcosystemCanvas } from './components/EcosystemCanvas';
+import { OutputConsole, type LogEntry } from './components/OutputConsole';
+import { GenomeVisualizer } from './components/GenomeVisualizer';
 import { BenchmarkView } from './components/BenchmarkView';
 import { CodeExportView, GITHUB_URL } from './components/CodeExportView';
 import { EvolutionChart, GenerationMetric } from './components/EvolutionChart';
@@ -61,6 +63,7 @@ import {
 import type { WorkerRequest, WorkerResponse } from './workers/evolutionWorker';
 
 type ActiveView = 'workbench' | 'isa' | 'benchmark' | 'export';
+
 
 const STORAGE_KEY = 'siliciumkern_saved_state_v2';
 
@@ -289,6 +292,110 @@ export default function App() {
     }
     return null;
   });
+
+  // Output console log buffer
+  const [logBuffer, setLogBuffer] = useState<LogEntry[]>([]);
+  const maxLogLines = 500;
+
+  const log = (text: string, type: LogEntry['type'] = 'info') => {
+    setLogBuffer(prev => {
+      const next = [...prev, { tick: env.tick, generation, text, type }];
+      return next.length > maxLogLines ? next.slice(-maxLogLines) : next;
+    });
+  };
+
+  const handleConsoleCommand = (cmd: string) => {
+    const trimmed = cmd.trim().toLowerCase();
+    const args = trimmed.split(/\s+/);
+    const command = args[0];
+    log(`> ${cmd}`, 'command');
+    if (command === 'clear' || command === 'cls') {
+      setLogBuffer([]);
+      log('Console leeggemaakt.', 'system');
+    } else if (command === 'help') {
+      log('Commando\'s: help, clear, status, reset, evolve, genome, ports, regs, ram, xmm, flags, env, score, brain', 'info');
+    } else if (command === 'status') {
+      log(`Generatie: ${generation} | Fitness: ${(coBestFitness ?? 0).toFixed(1)} | Taak: ${taskId} | Tick: ${env.tick}`, 'info');
+      log(`Temp: ${Math.round(env.ecoTemp)}°C | Energie: ${Math.round(env.energy)}% | Queue: ${Math.round(env.ecoQueue)}`, 'info');
+    } else if (command === 'reset') {
+      log('Reset wordt gestart...', 'info');
+      resetLivePreview(taskId);
+    } else if (command === 'evolve') {
+      log('Evolutie wordt gestart...', 'info');
+      setIsEvolving(true);
+    } else if (command === 'genome') {
+      const g = bestGenomeRef.current;
+      const disasm: string[] = [];
+      for (let i = 0; i < Math.min(16, PROG_LEN); i++) {
+        const inst = decodeInstruction(g, i);
+        disasm.push(`  @${i.toString(16).padStart(2,'0')}: ${disassembleInstruction(inst)}`);
+      }
+      log(`Top ${disasm.length} instructies van beste genome:\n${disasm.join('\n')}`, 'info');
+    } else if (command === 'ports') {
+      const portsStr = env.ports.map((p, i) => `P${i}=${p}`).join(' ');
+      log(`Huidige poorten: ${portsStr}`, 'info');
+    } else if (command === 'regs') {
+      const vm = vmRef.current;
+      const regsStr = Array.from(vm.regs).map((r, i) => `R${i}=0x${BigInt.asIntN(32, r).toString(16).padStart(8,'0')}`).join('  ');
+      log(`Registers: ${regsStr}`, 'register');
+    } else if (command === 'ram') {
+      const vm = vmRef.current;
+      const ramStr = Array.from(vm.ram).map((r, i) => `RAM[${i}]=0x${BigInt.asIntN(32, r).toString(16).padStart(8,'0')}`).join('  ');
+      log(`RAM: ${ramStr}`, 'register');
+    } else if (command === 'xmm') {
+      const vm = vmRef.current;
+      const xmmStr: string[] = [];
+      for (let v = 0; v < 4; v++) {
+        const lanes = [];
+        for (let l = 0; l < 4; l++) lanes.push(vm.xmm[v * 4 + l].toString());
+        xmmStr.push(`XMM${v}=[${lanes.join(', ')}]`);
+      }
+      log(`SIMD: ${xmmStr.join('  ')}`, 'register');
+    } else if (command === 'flags') {
+      const vm = vmRef.current;
+      log(`Flags: ZF=${vm.zf ? '1' : '0'}  CF=${vm.cf ? '1' : '0'}  SF=${vm.sf ? '1' : '0'}  IP=@${vm.ip.toString(16).padStart(2,'0')}  Cycles=${vm.cyclesUsed}/${maxCyclesRef.current}`, 'register');
+    } else if (command === 'env') {
+      log(`Omgeving: tick=${env.tick} | temp=${Math.round(env.ecoTemp)}°C | energy=${Math.round(env.energy)}% | queue=${Math.round(env.ecoQueue)}`, 'info');
+      if (env.taskId === 'ecosystem') {
+        log(`Brein: H-score=${env.ecoHomeoScore.toFixed(0)} A-score=${env.ecoArenaScore.toFixed(0)} B-score=${env.ecoBitScore.toFixed(0)} HW-score=${env.ecoHwScore.toFixed(0)}`, 'info');
+        log(`Brein: arena=(${env.ecoArenaX},${env.ecoArenaY}) | bit=0x${env.ecoBitCurr.toString(16)} | hwA=0x${env.ecoHwStreamA.toString(16)}`, 'info');
+      }
+    } else if (command === 'score') {
+      log(`Score: totaal=${env.cumulativeScore.toFixed(1)} | delta=${env.rewardDelta.toFixed(1)} | alive=${env.alive}`, 'info');
+      if (env.taskId === 'ecosystem') {
+        log(`Sub-scores: H=${env.ecoHomeoScore.toFixed(1)} A=${env.ecoArenaScore.toFixed(1)} B=${env.ecoBitScore.toFixed(1)} HW=${env.ecoHwScore.toFixed(1)}`, 'info');
+      }
+    } else if (command === 'brain') {
+      if (taskId === 'ecosystem') {
+        const miStage = env.ecoMiStage;
+        const miName = MI_STAGES[miStage]?.name ?? '?';
+        const miIcon = MI_STAGES[miStage]?.icon ?? '';
+        log(`🧠 Brein Status: ${miIcon} ${miName} (Gen ${env.ecoMiStageGenerations}/${env.ecoMiStageGenTarget})`, 'info');
+        log(`Dag: #${env.ecoDayNumber} | Tijd: ${env.ecoTimeOfDay}/100`, 'info');
+      } else {
+        log('Brein commando werkt alleen in ecosystem modus.', 'warning');
+      }
+    } else if (command === 'smc') {
+      const vm = vmRef.current;
+      const logEntries = vm.smcLog;
+      if (logEntries.length === 0) {
+        log('🔧 SMC Log: Geen self-modifying code events gedetecteerd.', 'info');
+        log('   PWRITE instructies herschrijven het genome tijdens runtime.', 'info');
+        log('   Als het genome leert zichzelf te verbeteren, verschijnen de events hier.', 'info');
+      } else {
+        log(`🔧 SMC Log: ${logEntries.length} self-modifying events gedetecteerd.`, 'info');
+        const recent = logEntries.slice(-10);
+        for (const entry of recent) {
+          log(`   @${entry.tick} slot=${entry.slot}: ${entry.oldMnemonic} → ${entry.newMnemonic}`, 'action');
+        }
+        if (logEntries.length > 10) {
+          log(`   ... en ${logEntries.length - 10} oudere events.`, 'info');
+        }
+      }
+    } else {
+      log(`Onbekend commando: "${cmd}". Typ "help" voor beschikbare commando's.`, 'warning');
+    }
+  };
 
   const [env, setEnv] = useState<EnvSnapshot>(() =>
     createInitialEnv(initialSaved?.taskId ?? 'homeostasis', 9001, initialHardware.capabilityMask)
@@ -682,6 +789,35 @@ export default function App() {
       detectedHwRef.current.capabilityMask
     );
     stepEnvironment(envRef.current, action, didAct, simRngRef.current, dist, livePeripheral);
+    // Log tick output
+    const e = envRef.current;
+    const vm = vmRef.current;
+    // Log first few instructions executed this tick (instruction type)
+    const instsToLog = Math.min(6, PROG_LEN);
+    const instLines: string[] = [];
+    for (let i = 0; i < instsToLog; i++) {
+      const inst = decodeInstruction(bestGenomeRef.current, i);
+      if (inst.opcode !== 0) { // skip NOP
+        instLines.push(disassembleInstruction(inst));
+      }
+    }
+    if (instLines.length > 0) {
+      log(`@${(vm.ip).toString(16).padStart(2,'0')} ${instLines.join(' → ')}`, 'instruction');
+    }
+    // Log action output (action type)
+    if (didAct) {
+      if (e.taskId === 'ecosystem') {
+        log(`ACT H=${e.ecoHomeoAction} A=${e.ecoArenaAction} B=0x${e.ecoBitPrediction.toString(16).padStart(2,'0')} HW=0x${e.ecoHwPrediction.toString(16).padStart(2,'0')}`, 'action');
+      } else {
+        log(`ACT=${action}`, 'action');
+      }
+    }
+    // Log score summary (info type)
+    if (e.taskId === 'ecosystem') {
+      log(`Tick ${e.tick}: Score=${e.cumulativeScore.toFixed(0)} | H=${e.ecoHomeoScore.toFixed(0)} A=${e.ecoArenaScore.toFixed(0)} B=${e.ecoBitScore.toFixed(0)} HW=${e.ecoHwScore.toFixed(0)}`, 'info');
+    } else {
+      log(`Tick ${e.tick}: score=${e.cumulativeScore.toFixed(0)}`, 'info');
+    }
     setEnv({
       ...envRef.current,
       history: [...envRef.current.history],
@@ -768,7 +904,8 @@ export default function App() {
           const allCoPop: Agent[] = [];
           let bestFitness = -Infinity;
           let meanFitnessSum = 0;
-          let bestGenome: Uint8Array = new Uint8Array(128);
+          // Fallback: als geen enkele agent overleefde, gebruik het starter genome
+          let bestGenome: Uint8Array = createStarterGenome(taskIdRef.current);
           let bestCoGenome: Uint8Array | null = null;
           let coBestFitness: number | null = null;
           let maxGeneration = 0;
@@ -848,6 +985,16 @@ export default function App() {
               resetLivePreview(taskIdRef.current, bestGenome, bestCoGenome);
             }
           }
+
+          // Loggen van generatie-uitkomst (evolution type)
+          const miStage = taskIdRef.current === 'ecosystem' ? envRef.current.ecoMiStage : -1;
+          const miStageName = miStage >= 0 ? MI_STAGES[miStage]?.name ?? '' : '';
+          log(
+            `Gen ${maxGeneration} | Best: ${bestFitness.toFixed(1)} | Mean: ${meanFitness.toFixed(1)}${miStageName ? ` | 🧠 ${miStageName}` : ''}`,
+            'evolution'
+          );
+          // Also log as info for the "Alles" filter
+          log(`Gen ${maxGeneration} | Best: ${bestFitness.toFixed(1)} | Mean: ${meanFitness.toFixed(1)}`, 'info');
 
           // Reset buffer voor volgende generatie
           generationResultsRef.results = [];
@@ -2115,6 +2262,18 @@ export default function App() {
 
             {/* Bottom Telemetry Trajectory */}
             <EvolutionChart metrics={metrics} />
+
+            {/* Genome Visualizer */}
+            <GenomeVisualizer
+              genome={bestGenome}
+              hitCounts={vmRef.current.hitCounts}
+            />
+
+            {/* Output Console */}
+            <OutputConsole
+              logs={logBuffer}
+              onCommand={handleConsoleCommand}
+            />
           </section>
         </main>
       )}

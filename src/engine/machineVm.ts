@@ -615,6 +615,7 @@ export interface VMState {
   ram: BigInt64Array; // 16 x 64-bit words
   activeCode: Uint8Array; // Runtime copy of 128-byte program (supports live SMC)
   smcModified: Uint8Array; // 32 flags marking addresses rewritten by PWRITE
+  smcLog: Array<{ tick: number; slot: number; oldMnemonic: string; newMnemonic: string }>; // SMC self-modification log
   ip: number;
   zf: boolean;
   cf: boolean;
@@ -627,6 +628,13 @@ export interface VMState {
   lastRamWrite: number;
   lastBusRead: number;
   lastBusWrite: number;
+  // Automatic memory consolidation (biological brain mimic)
+  memoryShortTerm: BigInt64Array; // 8 slots: short-term experience buffer (RAM[0-7] mirror)
+  memoryLongTerm: BigInt64Array; // 8 slots: consolidated long-term knowledge (RAM[8-15] mirror)
+  memoryConsolidationTicks: number; // ticks since last consolidation
+  memoryConsolidationInterval: number; // ticks between consolidations (default: 10)
+  memoryConsolidationCount: number; // total consolidations performed
+  memoryStability: Uint32Array; // 8 slots: how many ticks a short-term value has been stable
 }
 
 export interface Agent {
@@ -699,7 +707,7 @@ export interface EnvSnapshot {
   ecoMiStageGenTarget: number; // doel: 300 generaties per stadium
 };
 
-function scalarWidth(width: BitWidth): number {
+export function scalarWidth(width: BitWidth): number {
   return width === 128 ? 64 : width;
 }
 
@@ -740,6 +748,7 @@ export function createVMState(initialGenome?: Uint8Array): VMState {
     ram: new BigInt64Array(RAM_WORDS),
     activeCode: initialGenome ? new Uint8Array(initialGenome) : new Uint8Array(PROG_LEN * 4),
     smcModified: new Uint8Array(PROG_LEN),
+    smcLog: [],
     ip: 0,
     zf: false,
     cf: false,
@@ -752,6 +761,13 @@ export function createVMState(initialGenome?: Uint8Array): VMState {
     lastRamWrite: -1,
     lastBusRead: -1,
     lastBusWrite: -1,
+    // Automatic memory consolidation (biological brain mimic)
+    memoryShortTerm: new BigInt64Array(8),
+    memoryLongTerm: new BigInt64Array(8),
+    memoryConsolidationTicks: 0,
+    memoryConsolidationInterval: 10,
+    memoryConsolidationCount: 0,
+    memoryStability: new Uint32Array(8),
   };
 }
 
@@ -1247,12 +1263,29 @@ export function stepSingleInstruction(
       if (options.allowSmc) {
         const pIdx = Number(maskUnsigned(rdVal, bitWidth) & BigInt(PROG_LEN - 1));
         const base = pIdx * 4;
+        // Log de OUDЕ instructie VOOR het overschrijven
+        const oldInst = decodeInstruction(vm.activeCode, pIdx);
+        const oldMnemonic = disassembleInstruction(oldInst);
+
         const packed = Number(BigInt.asUintN(32, rsVal));
         vm.activeCode[base] = (packed & 0xff) % OPCODE_COUNT;
         vm.activeCode[base + 1] = ((packed >> 8) & 0xff) & 7;
         vm.activeCode[base + 2] = ((packed >> 16) & 0xff) & 7;
         vm.activeCode[base + 3] = (packed >> 24) & 0xff;
         vm.smcModified[pIdx] = 1;
+
+        // Log de NIEUWE instructie NA het herschrijven
+        const newInst = decodeInstruction(vm.activeCode, pIdx);
+        const newMnemonic = disassembleInstruction(newInst);
+
+        // Sla op in smcLog (max 50 entries)
+        vm.smcLog.push({
+          tick: vm.cyclesUsed,
+          slot: pIdx,
+          oldMnemonic,
+          newMnemonic,
+        });
+        if (vm.smcLog.length > 50) vm.smcLog.shift();
       }
       break;
     }
@@ -2358,6 +2391,57 @@ export function runVMTick(
   if (!didAct) {
     vm.out = Number(BigInt.asIntN(32, vm.regs[0]));
   }
+
+  // === Automatic Memory Consolidation (Biological Brain Mimic) ===
+  // Net als bij een biologisch brein: kortetermijn ervaringen worden automatisch
+  // naar langetermijn geheugen geconsolideerd na een aantal ticks.
+  // Het genome hoeft hier niets voor te doen — het systeem doet het automatisch.
+  vm.memoryConsolidationTicks++;
+
+  // 1. Capture huidige ervaring in kortetermijn geheugen
+  // Sla de register-standen op als een "ervaring" (8 registers = 8 slots)
+  for (let i = 0; i < 8; i++) {
+    vm.memoryShortTerm[i] = vm.regs[i];
+  }
+
+  // 2. Update stabiliteit: hoeveel ticks is een waarde stabiel?
+  for (let i = 0; i < 8; i++) {
+    // Als de waarde in long-term gelijk is aan short-term, verhoog stabiliteit
+    if (vm.memoryLongTerm[i] === vm.memoryShortTerm[i]) {
+      vm.memoryStability[i] = Math.min(255, vm.memoryStability[i] + 1);
+    } else {
+      // Waarde veranderd — verlaag stabiliteit (vergeten)
+      vm.memoryStability[i] = Math.max(0, vm.memoryStability[i] - 1);
+    }
+  }
+
+  // 3. Consolidatie: elke N ticks, verwerk stabiele patronen naar langetermijn
+  if (vm.memoryConsolidationTicks >= vm.memoryConsolidationInterval) {
+    vm.memoryConsolidationTicks = 0;
+    vm.memoryConsolidationCount++;
+
+    for (let i = 0; i < 8; i++) {
+      // Alleen consolideer als de stabiliteit hoog genoeg is
+      // Dit simuleert hoe een biologisch brein herhaalde ervaringen onthoudt
+      if (vm.memoryStability[i] >= 3) {
+        // Gewogen gemiddelde: bestaande long-term + nieuwe short-term
+        const weight = vm.memoryStability[i];
+        const lt = vm.memoryLongTerm[i];
+        const st = vm.memoryShortTerm[i];
+        // Hoe hoger de stabiliteit, hoe meer de nieuwe waarde telt
+        vm.memoryLongTerm[i] = (lt * (8 - weight) + st * weight) / 8;
+      }
+      // Laag stabiliteit = vergeten (long-term blijft ongewijzigd)
+    }
+  }
+
+  // 4. Maak geheugen toegankelijk via RAM[16-23] (short-term) en RAM[24-31] (long-term)
+  // Het genome kan LOAD/STORE gebruiken om het geheugen te raadplegen
+  for (let i = 0; i < 8; i++) {
+    vm.ram[16 + i] = vm.memoryShortTerm[i];  // RAM[16-23] = kortetermijn
+    vm.ram[24 + i] = vm.memoryLongTerm[i];   // RAM[24-31] = langetermijn
+  }
+
   return { action: vm.out, didAct };
 }
 
@@ -3680,6 +3764,56 @@ export function evolveGeneration(
     sum += agent.fitness;
   }
 
+  // === Fitness Sharing (Niching) ===
+  // Reduce fitness of similar genomes to maintain diversity and discover creative solutions.
+  // Uses opcode-based similarity: genomes with similar instruction patterns share fitness.
+  {
+    const SHARING_RADIUS = 0.35; // similarity threshold (0-1)
+    const SHARING_STRENGTH = 0.4; // max fitness reduction (0-1)
+    const sharedFitness = new Array(popSize);
+    for (let i = 0; i < popSize; i++) {
+      sharedFitness[i] = population[i].fitness;
+    }
+    for (let i = 0; i < popSize; i++) {
+      let nicheCount = 1;
+      const gi = population[i].genome;
+      for (let j = i + 1; j < popSize; j++) {
+        const gj = population[j].genome;
+        // Compute similarity: fraction of matching opcodes (byte 0 of each instruction)
+        let matchCount = 0;
+        for (let k = 0; k < PROG_LEN; k++) {
+          if (gi[k * 4] === gj[k * 4]) matchCount++;
+        }
+        const similarity = matchCount / PROG_LEN;
+        if (similarity > SHARING_RADIUS) {
+          // Distance from niche center (1 = identical, 0 = at threshold)
+          const distance = (similarity - SHARING_RADIUS) / (1.0 - SHARING_RADIUS);
+          nicheCount += distance;
+        }
+        // Also check active slots overlap for behavioral similarity
+        const slotsI = activeSlotsByAgent[i];
+        const slotsJ = activeSlotsByAgent[j];
+        if (slotsI.length > 0 && slotsJ.length > 0) {
+          let overlap = 0;
+          for (const s of slotsI) {
+            if (slotsJ.includes(s)) overlap++;
+          }
+          const jaccard = overlap / (slotsI.length + slotsJ.length - overlap);
+          if (jaccard > 0.5) {
+            nicheCount += (jaccard - 0.5) * 2; // scale 0.5-1 → 0-1
+          }
+        }
+      }
+      // Apply sharing: reduce fitness proportionally to niche crowding
+      const penalty = Math.min(SHARING_STRENGTH, (nicheCount - 1) / nicheCount * SHARING_STRENGTH);
+      sharedFitness[i] = population[i].fitness * (1.0 - penalty);
+    }
+    // Update agent fitness with shared values
+    for (let i = 0; i < popSize; i++) {
+      population[i].fitness = sharedFitness[i];
+    }
+  }
+
   const indexed = population.map((agent, origIdx) => ({
     agent,
     activeSlots: activeSlotsByAgent[origIdx],
@@ -3706,10 +3840,17 @@ export function evolveGeneration(
     return indexed[best];
   };
 
+  // === REVIVAL MECHANISM: als alle elites uitgestorven zijn, injecteer meer starters ===
+  // Als de top elites allemaal negatieve fitness hebben (uitgestorven), vervang ze door starters
+  const allElitesDead = indexed.length > 0 && indexed[0].agent.fitness < -50;
+  const revivalCount = allElitesDead ? Math.max(eliteCount, Math.floor(popSize * 0.4)) : 0;
+
   for (let i = 0; i < indexed.length && nextPopulation.length < eliteCount; i++) {
     const key = genomeDiversityKey(indexed[i].agent.genome);
     if (!seenElites.has(key)) {
       seenElites.add(key);
+      // Skip dode elites als revival actief is
+      if (allElitesDead && indexed[i].agent.fitness < -50) continue;
       nextPopulation.push({
         id: nextPopulation.length,
         genome: new Uint8Array(indexed[i].agent.genome),
@@ -3721,7 +3862,9 @@ export function evolveGeneration(
 
   // Versie met forceSense voor arena, hardware en ecosystem: 50% random genomes krijgen SENSE
   const forceSense = taskId === 'arena' || taskId === 'hardware' || taskId === 'ecosystem';
-  for (let i = 0; i < freshImmigrants && nextPopulation.length < popSize; i++) {
+  // Bij revival: injecteer MEER starters (40% van populatie)
+  const immigrantCount = allElitesDead ? revivalCount : freshImmigrants;
+  for (let i = 0; i < immigrantCount && nextPopulation.length < popSize; i++) {
     // 50% SEED_GENOME + mutatie, 50% volledig random
     if (rng() < 0.50) {
       const seedGenome = new Uint8Array(createStarterGenome(taskId));
@@ -3742,6 +3885,24 @@ export function evolveGeneration(
         generationBorn: generation + 1,
       });
     }
+  }
+
+  // === FALLBACK: Starter genome blijft altijd in de populatie ===
+  // Zorg dat de starter genome altijd minstens 1 exemplaar heeft (als "zaadje")
+  const starterGenome = createStarterGenome(taskId);
+  const hasStarter = nextPopulation.some(a => {
+    // Check of dit genome lijkt op de starter (eerste 4 instructies vergelijken)
+    const stInst = decodeInstruction(starterGenome, 0);
+    const agInst = decodeInstruction(a.genome, 0);
+    return stInst.opcode === agInst.opcode && stInst.dst === agInst.dst && stInst.src === agInst.src;
+  });
+  if (!hasStarter && nextPopulation.length < popSize) {
+    nextPopulation.push({
+      id: nextPopulation.length,
+      genome: new Uint8Array(starterGenome),
+      fitness: 0,
+      generationBorn: generation + 1,
+    });
   }
 
   // Hogere mutatie in vroege generaties voor meer exploratie

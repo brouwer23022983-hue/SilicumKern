@@ -8,6 +8,11 @@ import {
   generateNasmX64Code,
   generateStandaloneTrainerC99,
 } from '../engine/machineVm';
+import {
+  generateWasmCCode,
+  generateWasmBuildScript,
+  generateWasmWrapperJS,
+} from '../engine/generateWasmEmscripten';
 
 export const GITHUB_REPO = 'brouwer23022983-hue/SilicumKern';
 export const GITHUB_URL = `https://github.com/${GITHUB_REPO}`;
@@ -21,7 +26,7 @@ interface CodeExportViewProps {
   generation: number;
 }
 
-type ExportFormat = 'c99' | 'trainer' | 'nasm' | 'hex';
+type ExportFormat = 'c99' | 'trainer' | 'nasm' | 'hex' | 'wasm';
 
 export const CodeExportView: React.FC<CodeExportViewProps> = ({
   genome,
@@ -33,14 +38,19 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
 }) => {
   const [format, setFormat] = useState<ExportFormat>('c99');
   const [copied, setCopied] = useState(false);
+  const [wasmSubTab, setWasmSubTab] = useState<'c' | 'build' | 'wrapper'>('c');
 
   const code = useMemo(() => {
     if (format === 'c99') return generateC99Code(genome, taskId, bitWidth, maxCycles);
     if (format === 'trainer')
       return generateStandaloneTrainerC99(genome, taskId, bitWidth, maxCycles, popSize);
     if (format === 'nasm') return generateNasmX64Code(genome, taskId, bitWidth, maxCycles);
-    return generateHexDump(genome);
-  }, [format, genome, taskId, bitWidth, maxCycles, popSize]);
+    if (format === 'hex') return generateHexDump(genome);
+    // WASM sub-tabs
+    if (wasmSubTab === 'c') return generateWasmCCode(genome, taskId, bitWidth, maxCycles);
+    if (wasmSubTab === 'build') return generateWasmBuildScript(bitWidth);
+    return generateWasmWrapperJS();
+  }, [format, wasmSubTab, genome, taskId, bitWidth, maxCycles, popSize]);
 
   const filename =
     format === 'c99'
@@ -49,7 +59,13 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
         ? `silicium_trainer_${bitWidth}bit_gen${generation}.c`
         : format === 'nasm'
           ? `silicium_${bitWidth}bit_gen${generation}.asm`
-          : `silicium_gen${generation}.hex`;
+          : format === 'hex'
+            ? `silicium_gen${generation}.hex`
+            : wasmSubTab === 'c'
+              ? `silicium_wasm_${bitWidth}bit_gen${generation}.c`
+              : wasmSubTab === 'build'
+                ? `build_wasm.sh`
+                : `silicium_wasm_wrapper.js`;
 
   const handleCopy = async () => {
     try {
@@ -93,6 +109,7 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
                 ['trainer', 'C99 Volledige Trainer'],
                 ['nasm', 'x86-64 + SSE2 NASM'],
                 ['hex', 'Ruwe Hex'],
+                ['wasm', 'WebAssembly'],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -109,6 +126,32 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
               </button>
             ))}
           </div>
+
+          {/* WASM sub-tabs */}
+          {format === 'wasm' && (
+            <div className="flex items-center gap-1 p-1 bg-[#080B12] border border-slate-800 rounded-md">
+              {(
+                [
+                  ['c', 'Emscripten C'],
+                  ['build', 'Build Script'],
+                  ['wrapper', 'JS Wrapper'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setWasmSubTab(key)}
+                  className={`px-3 py-1.5 text-xs font-medium rounded transition-colors whitespace-nowrap shrink-0 ${
+                    wasmSubTab === key
+                      ? 'bg-violet-500/15 text-violet-300 border border-violet-500/40'
+                      : 'text-slate-400 hover:text-slate-200 border border-transparent'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
           <button
             type="button"
@@ -140,7 +183,9 @@ export const CodeExportView: React.FC<CodeExportViewProps> = ({
                 ? `gcc -O3 -march=native ${filename} -o trainer`
                 : format === 'nasm'
                   ? `nasm -f elf64 ${filename} -o micro_ai.o`
-                  : 'Direct te laden als uint8_t[128] in C, Rust no_std of bootloader'}
+                  : format === 'wasm'
+                    ? `emcc -O3 -s WASM=1 -s EXPORTED_FUNCTIONS='["_silicium_tick"]' ${filename} -o silicium.js`
+                    : 'Direct te laden als uint8_t[128] in C, Rust no_std of bootloader'}
           </code>
         </span>
 

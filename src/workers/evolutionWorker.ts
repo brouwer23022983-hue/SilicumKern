@@ -5,6 +5,7 @@ import {
   GeneralizationResult,
   SmcAbResult,
   TaskId,
+  createStarterGenome,
   evolveGeneration,
   runGeneralizationBenchmark,
   runSmcAbExperiment,
