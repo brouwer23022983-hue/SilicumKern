@@ -142,4 +142,17 @@ De MI-ladder is een DNA-streng: elk stadium is een cel, alleen de beste cel gaat
 - **machineVm.ts**: `saveMiStageGenome` en `loadMiStageGenome` functies
 - **EcosystemCanvas.tsx**: DNA-streng visualisatie in header
 - **README.md**: DNA-streng concept toegevoegd aan changelog
-- TypeScript compilatie verifiëren
+- TypeScript compilatie verifiëren ✓
+
+### ✓ Step 5: Brein — Ecosysteem zonder zones, avatar of grid
+Vervang het zone/avatar/grid concept door een "brein" dashboard dat alle 4 taken tegelijk toont.
+- **Geen avatar, geen zones, geen grid**: De kern staat op één plek en verwerkt alle signalen tegelijk
+- **16 sensoren (P0-P15)**: P0-P3 Homeostasis, P4-P7 Arena, P8-P11 Bitstream, P12-P15 Hardware
+- **4 registers als acties**: R0-R3 worden automatisch gelezen per tick, geen ACT-oproep nodig
+- **EnvSnapshot**: Alle zone-gerelateerde velden verwijderd, nieuwe velden voor scores en acties per taak
+- **updateEnvPorts**: 16 poorten in plaats van 8
+- **stepEnvironment**: Gelijktijdige evaluatie van alle 4 taken
+- **createStarterGenome**: Nieuw genome dat alle 4 taken behandelt
+- **EcosystemCanvas.tsx**: Herschreven van 24×24 grid naar dashboard met 4 sub-panels
+- **README.md**: Ecosysteem sectie en changelog Versie 2.5 bijgewerkt
+- TypeScript compilatie verifiëren ✓

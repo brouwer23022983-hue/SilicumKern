@@ -1,103 +1,29 @@
 import React, { useEffect, useRef } from 'react';
-import { EnvSnapshot, TASKS, evaluateAgentDetailed, createInitialEnv, MI_STAGES } from '../engine/machineVm';
+import { EnvSnapshot, TASKS, MI_STAGES } from '../engine/machineVm';
 
 interface EcosystemCanvasProps {
   env: EnvSnapshot;
   population?: Array<{ genome: Uint8Array; fitness: number }>;
 }
 
-const GRID_SIZE = 24;
-const ZONE_COLORS = [
-  'rgba(59, 130, 246, 0.12)',   // House - blue
-  'rgba(16, 185, 129, 0.12)',   // Forest - green
-  'rgba(168, 85, 247, 0.12)',   // Puzzle - purple
-  'rgba(245, 158, 11, 0.12)',   // Tower - amber
+// 4 sub-task panels for the "Brein" (Brain) view
+const SUB_TASKS = [
+  { name: 'Homeostasis', icon: '🌡️', color: '#3B82F6', bg: 'rgba(59, 130, 246, 0.1)' },
+  { name: 'Arena', icon: '🌲', color: '#10B981', bg: 'rgba(16, 185, 129, 0.1)' },
+  { name: 'Bitstream', icon: '🧩', color: '#A855F7', bg: 'rgba(168, 85, 247, 0.1)' },
+  { name: 'Hardware', icon: '📡', color: '#F59E0B', bg: 'rgba(245, 158, 11, 0.1)' },
 ];
-const ZONE_BORDER_COLORS = [
-  '#3B82F6',  // House
-  '#10B981',  // Forest
-  '#A855F7',  // Puzzle
-  '#F59E0B',  // Tower
-];
-const ZONE_LABELS = ['🏠 Huisje', '🌲 Bos', '🪨 Puzzel', '📡 Toren'];
-const ZONE_TASKS = ['Homeostasis', 'Foraging', 'Bitstream', 'Hardware'];
-const DAY_PHASES = ['🌅 Ochtend', '☀️ Middag 1', '🌤️ Middag 2', '🌇 Avond', '🌙 Nacht'];
-const DAY_TARGET_ZONES = [3, 2, 1, 0, 0]; // toren, puzzel, bos, thuis, thuis
-
-function getZoneFromPos(x: number, y: number): number {
-  if (x < 8 && y < 8) return 0;       // House
-  if (x >= 16 && y < 8) return 1;     // Forest
-  if (x < 8 && y >= 16) return 2;     // Puzzle
-  if (x >= 16 && y >= 16) return 3;   // Tower
-  return -1; // transition
-}
-
-const AGENT_COLORS = ['#3B82F6', '#10B981', '#A855F7', '#F59E0B']; // per zone
-
-// Simple deterministic RNG for agent positions
-function simpleRng(seed: number): () => number {
-  let s = seed;
-  return () => {
-    s = (s * 1664525 + 1013904223) & 0x7fffffff;
-    return s / 0x7fffffff;
-  };
-}
 
 export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env, population }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    // Compute agent positions — each agent runs independently from a random starting position
-    const agentPositions: Array<{ x: number; y: number; fitness: number; zone: number }> = [];
-    if (population && population.length > 0) {
-      // Show top 50 agents by fitness
-      const topAgents = [...population].sort((a, b) => b.fitness - a.fitness).slice(0, 50);
-
-      for (let idx = 0; idx < topAgents.length; idx++) {
-        const agent = topAgents[idx];
-        try {
-          // Each agent starts from a RANDOM position — this is how they explore independently
-          const rng = simpleRng(idx * 7919 + 104729);
-          const startX = Math.floor(rng() * GRID_SIZE);
-          const startY = Math.floor(rng() * GRID_SIZE);
-
-          // Create a fresh environment for this agent
-          const agentEnv = createInitialEnv('ecosystem', idx * 7919 + 104729, env.hwMask);
-          agentEnv.agentX = startX;
-          agentEnv.agentY = startY;
-          agentEnv.ecoZone = getZoneFromPos(startX, startY);
-          agentEnv.ecoDayPhase = env.ecoDayPhase;
-          agentEnv.ecoDayProgress = env.ecoDayProgress;
-          agentEnv.ecoEnergyNodes = env.ecoEnergyNodes.map(n => ({ x: n.x, y: n.y }));
-          agentEnv.ecoHazards = env.ecoHazards.map(h => ({ x: h.x, y: h.y }));
-          agentEnv.ecoHouseX = env.ecoHouseX;
-          agentEnv.ecoHouseY = env.ecoHouseY;
-
-          // Run the agent for a few ticks to see where it navigates
-          const agentSeed = idx * 7919 + 104729;
-          evaluateAgentDetailed(agent.genome, 'ecosystem', agentSeed, 32, 3, {
-            allowSmc: true,
-            initialEnv: agentEnv,
-          });
-          const zone = getZoneFromPos(agentEnv.agentX, agentEnv.agentY);
-          agentPositions.push({
-            x: agentEnv.agentX,
-            y: agentEnv.agentY,
-            fitness: agent.fitness,
-            zone,
-          });
-        } catch {
-          // Agent failed to evaluate — skip it
-        }
-      }
-    }
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
     const dpr = window.devicePixelRatio || 1;
-    // Use parent container size if canvas has no dimensions yet
     const parent = canvas.parentElement;
     const parentW = parent ? parent.clientWidth : 400;
     const parentH = parent ? parent.clientHeight : 320;
@@ -117,309 +43,112 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env, populatio
     ctx.fillStyle = '#090D16';
     ctx.fillRect(0, 0, w, h);
 
-    const pad = 20;
-    const size = Math.max(1, Math.min(w - pad * 2, h - pad * 2));
-    const ox = Math.floor((w - size) / 2);
-    const oy = Math.floor((h - size) / 2);
-    const cell = size / GRID_SIZE;
+    const pad = 16;
+    const panelW = (w - pad * 3) / 2;
+    const panelH = (h - pad * 3) / 2;
 
-    // Draw 4 zones
-    const zones = [
-      { x1: 0, y1: 0, x2: 8, y2: 8, idx: 0 },       // House top-left
-      { x1: 16, y1: 0, x2: 24, y2: 8, idx: 1 },     // Forest top-right
-      { x1: 0, y1: 16, x2: 8, y2: 24, idx: 2 },     // Puzzle bottom-left
-      { x1: 16, y1: 16, x2: 24, y2: 24, idx: 3 },   // Tower bottom-right
-    ];
+    // Draw 4 sub-task panels in a 2x2 grid
+    for (let i = 0; i < 4; i++) {
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const px = pad + col * (panelW + pad);
+      const py = pad + row * (panelH + pad);
 
-    for (const z of zones) {
-      const zx = ox + z.x1 * cell;
-      const zy = oy + z.y1 * cell;
-      const zw = (z.x2 - z.x1) * cell;
-      const zh = (z.y2 - z.y1) * cell;
+      const task = SUB_TASKS[i];
 
-      // Zone fill
-      ctx.fillStyle = ZONE_COLORS[z.idx];
-      ctx.fillRect(zx, zy, zw, zh);
+      // Panel background
+      ctx.fillStyle = task.bg;
+      ctx.strokeStyle = task.color;
+      ctx.lineWidth = 1.5;
 
-      // Zone border
-      ctx.strokeStyle = ZONE_BORDER_COLORS[z.idx];
-      ctx.lineWidth = 2;
-      ctx.strokeRect(zx, zy, zw, zh);
-
-      // Zone label
-      ctx.font = 'bold 11px "JetBrains Mono", monospace';
-      ctx.fillStyle = ZONE_BORDER_COLORS[z.idx];
-      ctx.fillText(ZONE_LABELS[z.idx], zx + 4, zy + 14);
-    }
-
-    // Grid lines (subtle)
-    ctx.strokeStyle = '#182235';
-    ctx.lineWidth = 0.5;
-    for (let i = 0; i <= GRID_SIZE; i++) {
-      const x = ox + i * cell;
-      const y = oy + i * cell;
+      // Rounded rect
+      const r = 6;
       ctx.beginPath();
-      ctx.moveTo(x, oy);
-      ctx.lineTo(x, oy + size);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(ox, y);
-      ctx.lineTo(ox + size, y);
-      ctx.stroke();
-    }
-
-    // House icon (simple house shape at ecoHouseX, ecoHouseY)
-    if (env.ecoHouseX !== undefined && env.ecoHouseY !== undefined) {
-      const hx = ox + (env.ecoHouseX + 0.5) * cell;
-      const hy = oy + (env.ecoHouseY + 0.5) * cell;
-      const hs = cell * 0.4;
-
-      // House body
-      ctx.fillStyle = '#3B82F6';
-      ctx.fillRect(hx - hs * 0.6, hy - hs * 0.2, hs * 1.2, hs * 0.8);
-      // Roof
-      ctx.beginPath();
-      ctx.moveTo(hx - hs * 0.8, hy - hs * 0.2);
-      ctx.lineTo(hx, hy - hs * 0.9);
-      ctx.lineTo(hx + hs * 0.8, hy - hs * 0.2);
+      ctx.moveTo(px + r, py);
+      ctx.lineTo(px + panelW - r, py);
+      ctx.quadraticCurveTo(px + panelW, py, px + panelW, py + r);
+      ctx.lineTo(px + panelW, py + panelH - r);
+      ctx.quadraticCurveTo(px + panelW, py + panelH, px + panelW - r, py + panelH);
+      ctx.lineTo(px + r, py + panelH);
+      ctx.quadraticCurveTo(px, py + panelH, px, py + panelH - r);
+      ctx.lineTo(px, py + r);
+      ctx.quadraticCurveTo(px, py, px + r, py);
       ctx.closePath();
-      ctx.fillStyle = '#60A5FA';
       ctx.fill();
-      // Door
-      ctx.fillStyle = '#1E3A5F';
-      ctx.fillRect(hx - hs * 0.15, hy + hs * 0.1, hs * 0.3, hs * 0.5);
-    }
-
-    // Energy nodes in forest zone
-    if (env.ecoEnergyNodes) {
-      for (const n of env.ecoEnergyNodes) {
-        const nx = ox + (n.x + 0.5) * cell;
-        const ny = oy + (n.y + 0.5) * cell;
-        ctx.fillStyle = 'rgba(16, 185, 129, 0.2)';
-        ctx.beginPath();
-        ctx.arc(nx, ny, cell * 0.35, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.strokeStyle = '#10B981';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(nx, ny, cell * 0.2, 0, Math.PI * 2);
-        ctx.stroke();
-      }
-    }
-
-    // Hazards in forest zone
-    if (env.ecoHazards) {
-      for (const hz of env.ecoHazards) {
-        const hx = ox + (hz.x + 0.5) * cell;
-        const hy = oy + (hz.y + 0.5) * cell;
-        ctx.fillStyle = 'rgba(244, 63, 94, 0.18)';
-        ctx.fillRect(ox + hz.x * cell + 2, oy + hz.y * cell + 2, cell - 4, cell - 4);
-        ctx.strokeStyle = '#F43F5E';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(hx - cell * 0.2, hy - cell * 0.2);
-        ctx.lineTo(hx + cell * 0.2, hy + cell * 0.2);
-        ctx.moveTo(hx + cell * 0.2, hy - cell * 0.2);
-        ctx.lineTo(hx - cell * 0.2, hy + cell * 0.2);
-        ctx.stroke();
-      }
-    }
-
-    // Trail
-    const trail = env.ecoTrail || env.trail;
-    if (trail && trail.length > 1) {
-      ctx.strokeStyle = 'rgba(6, 182, 212, 0.4)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      trail.forEach((pt, idx) => {
-        const px = ox + (pt.x + 0.5) * cell;
-        const py = oy + (pt.y + 0.5) * cell;
-        if (idx === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      });
       ctx.stroke();
-    }
 
-    // Draw all population agents as colored dots
-    if (agentPositions.length > 0) {
-      const dotSize = Math.max(2, Math.min(4, cell * 0.3));
-      for (const ap of agentPositions) {
-        const dx = ox + (ap.x + 0.5) * cell;
-        const dy = oy + (ap.y + 0.5) * cell;
-        const color = ap.zone >= 0 ? AGENT_COLORS[ap.zone] : '#64748B';
-        ctx.fillStyle = color;
-        ctx.globalAlpha = 0.7;
-        ctx.beginPath();
-        ctx.arc(dx, dy, dotSize, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1.0;
-    }
-
-    // Draw main avatar (best agent) as a highlighted cube
-    const ax = ox + (env.agentX + 0.5) * cell;
-    const ay = oy + (env.agentY + 0.5) * cell;
-    const as = cell * 0.35;
-
-    // Glow effect
-    ctx.fillStyle = 'rgba(6, 182, 212, 0.3)';
-    ctx.beginPath();
-    ctx.arc(ax, ay, as * 1.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Cube top face
-    ctx.fillStyle = '#06B6D4';
-    ctx.beginPath();
-    ctx.moveTo(ax, ay - as);
-    ctx.lineTo(ax + as * 0.6, ay - as * 0.6);
-    ctx.lineTo(ax, ay - as * 0.2);
-    ctx.lineTo(ax - as * 0.6, ay - as * 0.6);
-    ctx.closePath();
-    ctx.fill();
-
-    // Cube left face
-    ctx.fillStyle = '#0891B2';
-    ctx.beginPath();
-    ctx.moveTo(ax - as * 0.6, ay - as * 0.6);
-    ctx.lineTo(ax, ay - as * 0.2);
-    ctx.lineTo(ax, ay + as * 0.6);
-    ctx.lineTo(ax - as * 0.6, ay + as * 0.2);
-    ctx.closePath();
-    ctx.fill();
-
-    // Cube right face
-    ctx.fillStyle = '#0E7490';
-    ctx.beginPath();
-    ctx.moveTo(ax + as * 0.6, ay - as * 0.6);
-    ctx.lineTo(ax, ay - as * 0.2);
-    ctx.lineTo(ax, ay + as * 0.6);
-    ctx.lineTo(ax + as * 0.6, ay + as * 0.2);
-    ctx.closePath();
-    ctx.fill();
-
-    // Cube outline
-    ctx.strokeStyle = '#E0F2FE';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(ax, ay - as);
-    ctx.lineTo(ax + as * 0.6, ay - as * 0.6);
-    ctx.lineTo(ax + as * 0.6, ay + as * 0.2);
-    ctx.lineTo(ax, ay + as * 0.6);
-    ctx.lineTo(ax - as * 0.6, ay + as * 0.2);
-    ctx.lineTo(ax - as * 0.6, ay - as * 0.6);
-    ctx.closePath();
-    ctx.stroke();
-
-    // Population count info
-    if (agentPositions.length > 0) {
-      ctx.font = '10px "JetBrains Mono", monospace';
-      ctx.fillStyle = '#64748B';
-      const popLabel = `👥 ${agentPositions.length} agents`;
-      ctx.fillText(popLabel, ox + 4, oy + size - 6);
-    }
-
-    // Border frame
-    ctx.strokeStyle = '#334155';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(ox, oy, size, size);
-
-    // Evolution zone highlight — the active training zone gets a thick border
-    const evoZone = env.ecoEvolutionZone ?? 3;
-    const evoZones = [
-      { x1: 0, y1: 0, x2: 8, y2: 8 },
-      { x1: 16, y1: 0, x2: 24, y2: 8 },
-      { x1: 0, y1: 16, x2: 8, y2: 24 },
-      { x1: 16, y1: 16, x2: 24, y2: 24 },
-    ];
-    if (evoZone >= 0 && evoZone < 4) {
-      const ez = evoZones[evoZone];
-      const ezx = ox + ez.x1 * cell;
-      const ezy = oy + ez.y1 * cell;
-      const ezw = (ez.x2 - ez.x1) * cell;
-      const ezh = (ez.y2 - ez.y1) * cell;
-      ctx.strokeStyle = ZONE_BORDER_COLORS[evoZone];
-      ctx.lineWidth = 4;
-      ctx.strokeRect(ezx - 2, ezy - 2, ezw + 4, ezh + 4);
-      // Dim non-active zones
-      for (const z of zones) {
-        if (z.idx !== evoZone) {
-          const zx = ox + z.x1 * cell;
-          const zy = oy + z.y1 * cell;
-          const zw = (z.x2 - z.x1) * cell;
-          const zh = (z.y2 - z.y1) * cell;
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-          ctx.fillRect(zx, zy, zw, zh);
-        }
-      }
-    }
-
-    // Target zone highlight (dag/nacht cyclus) — only if different from evolution zone
-    const dayPhase = env.ecoDayPhase ?? 0;
-    const targetZone = env.ecoTargetZone ?? DAY_TARGET_ZONES[dayPhase];
-    if (targetZone !== evoZone && targetZone >= 0 && targetZone < 4) {
-      const targetZones = [
-        { x1: 0, y1: 0, x2: 8, y2: 8 },
-        { x1: 16, y1: 0, x2: 24, y2: 8 },
-        { x1: 0, y1: 16, x2: 8, y2: 24 },
-        { x1: 16, y1: 16, x2: 24, y2: 24 },
-      ];
-      const tz = targetZones[targetZone];
-      const tzx = ox + tz.x1 * cell;
-      const tzy = oy + tz.y1 * cell;
-      const tzw = (tz.x2 - tz.x1) * cell;
-      const tzh = (tz.y2 - tz.y1) * cell;
-      ctx.strokeStyle = 'rgba(250, 204, 21, 0.4)';
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 4]);
-      ctx.strokeRect(tzx, tzy, tzw, tzh);
-      ctx.setLineDash([]);
-    }
-
-    // Current zone indicator
-    const currentZone = env.ecoZone ?? -1;
-    if (currentZone >= 0) {
+      // Panel title
       ctx.font = 'bold 12px "JetBrains Mono", monospace';
-      ctx.fillStyle = ZONE_BORDER_COLORS[currentZone];
-      ctx.fillText(
-        '▶ ' + ZONE_LABELS[currentZone],
-        ox + size - 80,
-        oy + size - 8
-      );
+      ctx.fillStyle = task.color;
+      ctx.fillText(`${task.icon} ${task.name}`, px + 8, py + 18);
+
+      // Sub-task data
+      ctx.font = '11px "JetBrains Mono", monospace';
+      let yOff = 38;
+      const textX = px + 8;
+
+      if (i === 0) {
+        // Homeostasis: temp, queue, energy, action
+        ctx.fillStyle = '#94A3B8';
+        ctx.fillText(`Temp: ${Math.round(env.ecoTemp)}°C`, textX, py + yOff); yOff += 16;
+        ctx.fillText(`Queue: ${Math.round(env.ecoQueue)}`, textX, py + yOff); yOff += 16;
+        ctx.fillText(`Energy: ${Math.round(env.energy)}%`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#E2E8F0';
+        ctx.fillText(`Actie: ${env.ecoHomeoAction}`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#64748B';
+        ctx.fillText(`Score: ${env.ecoHomeoScore.toFixed(1)}`, textX, py + yOff);
+      } else if (i === 1) {
+        // Arena: position, nodes, hazards
+        ctx.fillStyle = '#94A3B8';
+        ctx.fillText(`Pos: (${env.ecoArenaX}, ${env.ecoArenaY})`, textX, py + yOff); yOff += 16;
+        ctx.fillText(`Nodes: ${env.ecoArenaNodes.length}`, textX, py + yOff); yOff += 16;
+        ctx.fillText(`Hazards: ${env.ecoArenaHazards.length}`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#E2E8F0';
+        ctx.fillText(`Actie: ${env.ecoArenaAction}`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#64748B';
+        ctx.fillText(`Score: ${env.ecoArenaScore.toFixed(1)}`, textX, py + yOff);
+      } else if (i === 2) {
+        // Bitstream: current, prev, prediction
+        ctx.fillStyle = '#94A3B8';
+        ctx.fillText(`Curr: 0x${env.ecoBitCurr.toString(16).padStart(2, '0')}`, textX, py + yOff); yOff += 16;
+        ctx.fillText(`Prev: 0x${env.ecoBitPrev.toString(16).padStart(2, '0')}`, textX, py + yOff); yOff += 16;
+        const target = (env.ecoBitCurr ^ (env.ecoBitPrev >> 1)) & 0x0f;
+        ctx.fillText(`Target: 0x${target.toString(16).padStart(2, '0')}`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#E2E8F0';
+        ctx.fillText(`Pred: 0x${env.ecoBitPrediction.toString(16).padStart(2, '0')}`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#64748B';
+        ctx.fillText(`Score: ${env.ecoBitScore.toFixed(1)}`, textX, py + yOff);
+      } else if (i === 3) {
+        // Hardware: stream A, B, prediction
+        ctx.fillStyle = '#94A3B8';
+        ctx.fillText(`ChA: ${env.ecoHwStreamA}`, textX, py + yOff); yOff += 16;
+        ctx.fillText(`ChB: ${env.ecoHwStreamB}`, textX, py + yOff); yOff += 16;
+        const hwTarget = ((env.ecoHwStreamA ^ env.ecoHwStreamB)) & 0x0f;
+        ctx.fillText(`XOR: 0x${hwTarget.toString(16).padStart(2, '0')}`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#E2E8F0';
+        ctx.fillText(`Pred: 0x${env.ecoHwPrediction.toString(16).padStart(2, '0')}`, textX, py + yOff); yOff += 16;
+        ctx.fillStyle = '#64748B';
+        ctx.fillText(`Score: ${env.ecoHwScore.toFixed(1)}`, textX, py + yOff);
+      }
     }
 
-    // Day phase indicator (top-left)
-    ctx.font = 'bold 12px "JetBrains Mono", monospace';
-    const phaseLabel = DAY_PHASES[dayPhase] || DAY_PHASES[0];
-    ctx.fillStyle = dayPhase === 4 ? '#818CF8' : '#FCD34D'; // nacht=purple, overdag=yellow
-    ctx.fillText(phaseLabel, ox + 4, oy - 6);
-    // Target zone label
-    ctx.fillStyle = '#94A3B8';
-    ctx.font = '10px "JetBrains Mono", monospace';
-    ctx.fillText('→ ' + ZONE_LABELS[targetZone], ox + ctx.measureText(phaseLabel).width + 8, oy - 6);
-    
-    // Sleep indicator
-    if (env.ecoSleeping) {
-      ctx.font = 'bold 11px "JetBrains Mono", monospace';
-      ctx.fillStyle = '#A78BFA';
-      const sleepLabel = '💤 Slaapt...';
-      ctx.fillText(sleepLabel, ox + size - 100, oy - 6);
-    }
-    
-    // Memory info (bottom-right)
-    const memLong = env.ecoMemoryLong ?? [];
-    const memShort = env.ecoMemoryShort ?? [];
-    const knowledgeCount = memLong.filter(v => v !== 0).length;
-    const shortCount = memShort.filter(v => v !== 0).length;
+    // Center brain icon
+    const cx = w / 2;
+    const cy = h / 2;
+    ctx.font = '24px serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('🧠', cx, cy);
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+
+    // Tick and day info at bottom
     ctx.font = '10px "JetBrains Mono", monospace';
     ctx.fillStyle = '#64748B';
-    const memLabel = `🧠 Kort: ${shortCount}/8 Lang: ${knowledgeCount}/8`;
-    ctx.fillText(memLabel, ox + size - 80, oy + size + 14);
-    
-    // Days lived
-    if (env.ecoDaysLived !== undefined && env.ecoDaysLived > 0) {
-      ctx.fillStyle = '#94A3B8';
-      ctx.fillText(`Dag ${env.ecoDaysLived}`, ox + size - 80, oy + size + 26);
-    }
+    ctx.textAlign = 'center';
+    ctx.fillText(`Tick ${env.tick} · Dag ${env.ecoDayNumber} · Score ${env.cumulativeScore.toFixed(1)}`, cx, h - 6);
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
   }, [env]);
 
   const spec = TASKS[env.taskId];
@@ -464,35 +193,11 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env, populatio
               Gen {env.ecoMiStageGenerations}/{env.ecoMiStageGenTarget}
             </span>
           )}
-          {/* Zone evolution progress */}
-          {env.ecoEvolutionZone !== undefined && (
-            <span className={`font-bold ${ZONE_BORDER_COLORS[env.ecoEvolutionZone] ? `text-[${ZONE_BORDER_COLORS[env.ecoEvolutionZone]}]` : 'text-cyan-400'}`}>
-              ▶ {ZONE_LABELS[env.ecoEvolutionZone]} ({ZONE_TASKS[env.ecoEvolutionZone]})
-            </span>
-          )}
-          <span className="text-cyan-400">Pos ({env.agentX},{env.agentY})</span>
           <span className="text-emerald-400">Energie {Math.round(env.energy)}%</span>
-          <span className="text-amber-400">Bronnen {env.ecoNodesCollected ?? 0}</span>
-          <span className="text-rose-400">Storing {env.ecoHazardHits ?? 0}</span>
-          <span className="text-yellow-400">Ritme {env.ecoRhythmHits ?? 0}✓</span>
-          {env.ecoDayPhase !== undefined && (
-            <span className={(env.ecoDayPhase === 4 ? 'text-indigo-400' : 'text-orange-400')}>
-              {DAY_PHASES[env.ecoDayPhase] || DAY_PHASES[0]}
-            </span>
-          )}
-          {env.ecoSleeping && <span className="text-purple-400">💤 Slaapt</span>}
-          <span className="text-cyan-400">🧠 {env.ecoMemoryLong?.filter(v => v !== 0).length ?? 0} kennis</span>
-          {env.ecoDaysLived !== undefined && env.ecoDaysLived > 0 && (
-            <span className="text-slate-400">Dag {env.ecoDaysLived}</span>
-          )}
-          {env.ecoZoneScores && (
-            <>
-              <span className="text-blue-400">Huisje {env.ecoZoneScores[0].toFixed(0)}</span>
-              <span className="text-green-400">Bos {env.ecoZoneScores[1].toFixed(0)}</span>
-              <span className="text-purple-400">Puzzel {env.ecoZoneScores[2].toFixed(0)}</span>
-              <span className="text-amber-400">Toren {env.ecoZoneScores[3].toFixed(0)}</span>
-            </>
-          )}
+          <span className="text-blue-400">H: {env.ecoHomeoScore.toFixed(0)}</span>
+          <span className="text-green-400">A: {env.ecoArenaScore.toFixed(0)}</span>
+          <span className="text-purple-400">B: {env.ecoBitScore.toFixed(0)}</span>
+          <span className="text-amber-400">HW: {env.ecoHwScore.toFixed(0)}</span>
         </div>
       </div>
 
@@ -500,8 +205,8 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env, populatio
         <canvas ref={canvasRef} className="w-full h-full block cursor-crosshair" />
       </div>
 
-      {/* Sensor port bus strip (P0..P7) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 border-t border-slate-800 bg-[#0A0E17] divide-x divide-y divide-slate-800/80">
+      {/* Sensor port bus strip (P0..P15) */}
+      <div className="grid grid-cols-4 sm:grid-cols-8 border-t border-slate-800 bg-[#0A0E17] divide-x divide-y divide-slate-800/80">
         {spec.ports.map((label, idx) => (
           <div key={label} className="px-2.5 py-2">
             <div className="text-[11px] text-slate-400 truncate">{label}</div>

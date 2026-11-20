@@ -573,23 +573,31 @@ export const TASKS: Record<TaskId, TaskSpec> = {
   },
   ecosystem: {
     id: 'ecosystem',
-    name: 'Ecosysteem (4-in-1)',
-    shortDesc: 'Navigeer door een bos met 4 zones: huisje (homeostasis), bos (arena), puzzelstenen (bitstream), en sensor-toren (hardware).',
+    name: 'Brein (4-in-1)',
+    shortDesc: 'Alle 4 taken tegelijk: homeostasis, arena, bitstream, hardware. Het brein verwerkt alle signalen en kiest de juiste acties via R0-R3.',
     ports: [
-      'P0: Zone-sensor A (temp/DX-energie/bitCurr/hwA)',
-      'P1: Zone-sensor B (queue/DY-energie/bitPrev/hwB)',
-      'P2: Zone-sensor C (energy/DX-hazard/tick&1/hwA^hwB)',
-      'P3: Zone-sensor D (temp-delta/DY-hazard/popcnt/hwMask)',
-      'P4: Energie (%)',
-      'P5: Klok-tick',
-      'P6: Zone-ID (0=Huisje, 1=Bos, 2=Puzzel, 3=Toren)',
-      'P7: Huisje-richting (0=Noord, 1=Oost, 2=Zuid, 3=West)',
+      'P0: Homeo Temp (0..100°C)',
+      'P1: Homeo Werklast-wachtrij',
+      'P2: Homeo Energie-rail (%)',
+      'P3: Homeo Temp-afwijking',
+      'P4: Arena Delta X Energie',
+      'P5: Arena Delta Y Energie',
+      'P6: Arena Delta X Storing',
+      'P7: Arena Delta Y Storing',
+      'P8: Bitstream Huidig buswoord',
+      'P9: Bitstream Vorig buswoord',
+      'P10: Bitstream Klok-pariteit',
+      'P11: Bitstream Bit-gewicht',
+      'P12: Hardware Kanaal A',
+      'P13: Hardware Kanaal B',
+      'P14: Hardware XOR-signaal',
+      'P15: Hardware Mask',
     ],
     actions: [
-      'Zone 0 (Huisje): 0=Rust, 1=Werk, 2=Turbo, 3=Koelen',
-      'Zone 1 (Bos): 0=Noord, 1=Oost, 2=Zuid, 3=West',
-      'Zone 2 (Puzzel): ACT & 0x0F = Bit-voorspelling',
-      'Zone 3 (Toren): ACT & 0x0F = Bus-voorspelling',
+      'R0: Homeostasis (0=Rust, 1=Werk, 2=Turbo, 3=Koelen)',
+      'R1: Arena (0=Noord, 1=Oost, 2=Zuid, 3=West)',
+      'R2: Bitstream (0-15 = 4-bit voorspelling)',
+      'R3: Hardware (0-15 = bus-respons)',
     ],
   },
 };
@@ -661,45 +669,30 @@ export interface EnvSnapshot {
   hwPrevA: number;
   cameraActive: boolean;
   cameraGrid: number[] | null;
-  // Ecosystem-specific fields
-  ecoZone: number; // 0=house, 1=forest, 2=puzzle, 3=tower
-  ecoHouseX: number;
-  ecoHouseY: number;
-  ecoEnergyNodes: Array<{ x: number; y: number }>;
-  ecoHazards: Array<{ x: number; y: number }>;
-  ecoBitCurr: number;
-  ecoBitPrev: number;
-  ecoHwStreamA: number;
-  ecoHwStreamB: number;
-  ecoTemp: number;
-  ecoQueue: number;
-  ecoZoneScores: number[]; // [homeostasis, arena, bitstream, hardware] cumulative
-  ecoZoneWeights: number[]; // [0.8, 1.0, 1.5, 1.5]
-  ecoTrail: Array<{ x: number; y: number }>;
-  ecoNodesCollected: number;
-  ecoHazardHits: number;
-  ecoBitExactHits: number;
-  ecoHwExactHits: number;
-  // Day/night cycle
-  ecoDayPhase: number; // 0=morgen(ochtend), 1=middag1(puzzel), 2=middag2(bos), 3=avond, 4=nacht
-  ecoDayProgress: number; // 0.0-1.0 progress binnen huidige fase
-  ecoDayLength: number; // ticks per dag-fase (bijv. 12 ticks per fase)
-  ecoTargetZone: number; // doel-zone voor huidige dag-fase
-  ecoRhythmHits: number; // aantal keer het juiste ritme gevolgd
-  // Memory: short-term (overdag) en long-term (slapen/consolidatie)
-  ecoMemoryShort: number[]; // kortetermijn geheugen: ervaringen van vandaag (max 8 slots)
-  ecoMemoryLong: number[]; // langetermijn geheugen: geconsolideerde kennis (max 8 slots)
-  ecoMemoryIndex: number; // huidige schrijfpunt in kortetermijn geheugen
-  ecoSleeping: boolean; // avatar slaapt (nacht in huisje = consolidatie)
-  ecoSleepTicks: number; // ticks sinds slapen begon
-  ecoConsolidationBonus: number; // bonus voor geconsolideerde kennis
-  ecoDaysLived: number; // aantal dagen (elke nacht = nieuwe dag)
-  // Zone-based evolution: 300 generations per zone, then auto-switch
-  ecoEvolutionZone: number; // huidige trainings-zone (0=house, 1=forest, 2=puzzle, 3=tower)
-  ecoZoneGenerations: number; // generaties in huidige zone (0-299)
-  ecoZoneGenTarget: number; // doel: 300 generaties per zone
-  ecoZoneOrder: number[]; // volgorde van zones per dag: [3,2,1,0,0] = toren,puzzel,bos,thuis,thuis
-  ecoZonePhaseIndex: number; // huidige index in ecoZoneOrder
+  // Ecosystem "Brein" — all 4 tasks simultaneously, no zones/avatar/grid
+  ecoHomeoScore: number; // cumulative homeostasis score
+  ecoArenaScore: number; // cumulative arena score
+  ecoBitScore: number; // cumulative bitstream score
+  ecoHwScore: number; // cumulative hardware score
+  ecoHomeoAction: number; // last homeostasis action from R0
+  ecoArenaAction: number; // last arena action from R1
+  ecoBitPrediction: number; // last bitstream prediction from R2
+  ecoHwPrediction: number; // last hardware prediction from R3
+  // Internal state for each sub-task
+  ecoTemp: number; // homeostasis temperature
+  ecoQueue: number; // homeostasis queue
+  ecoArenaX: number; // arena agent X position (virtual)
+  ecoArenaY: number; // arena agent Y position (virtual)
+  ecoArenaNodes: Array<{ x: number; y: number }>; // arena energy nodes
+  ecoArenaHazards: Array<{ x: number; y: number }>; // arena hazards
+  ecoBitCurr: number; // bitstream current word
+  ecoBitPrev: number; // bitstream previous word
+  ecoHwStreamA: number; // hardware channel A
+  ecoHwStreamB: number; // hardware channel B
+  // Time tracking
+  ecoTickCount: number; // total ticks elapsed
+  ecoDayNumber: number; // day number (increments every 100 ticks)
+  ecoTimeOfDay: number; // 0-99 progress within current day
   // MI-evolution ladder: 6 stages of Machine Intelligence
   ecoMiStage: number; // 0=Overleeft, 1=Perceert, 2=Denkt, 3=Communiqueert, 4=Zichzelf verbetert, 5=Abstract denkt
   ecoMiStageGenerations: number; // generaties in huidige MI-stadium (0-299)
@@ -2512,66 +2505,62 @@ export function createStarterGenome(taskId: TaskId): Uint8Array {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else if (taskId === 'ecosystem') {
-    // Ecosysteem: dag/nacht ritme follower
-    // Ritme: ochtend(0)→toren(20,20), middag1(1)→puzzel(4,20), middag2(2)→bos(20,4), avond(3)→thuis(4,4), nacht(4)→thuis(4,4)
-    // P5 = dag-fase (bits 0-2 = 0-4) + progress (bits 3-7)
-    // P7 = huisje-richting: bit3=DX<0(8), bit2=DX>0(4), bit1=DY<0(2), bit0=DY>0(1)
-    // Strategie: lees P5, bepaal dag-fase, kies richting per fase
-    // Target zone centers: huisje(4,4), bos(20,4), puzzel(4,20), toren(20,20)
-    // Startpositie: (8,8)
-    // Fase 0 (ochtend) → toren(20,20): ga Oost
-    // Fase 1 (middag1) → puzzel(4,20): ga West
-    // Fase 2 (middag2) → bos(20,4): ga Oost
-    // Fase 3 (avond) → thuis(4,4): decodeer P7
-    // Fase 4 (nacht) → thuis(4,4): decodeer P7
-    encodeInstruction(g, 0, Opcode.SENSE, 0, 5, 0);   // R0 = P5 (dag-fase + progress)
-    encodeInstruction(g, 1, Opcode.SENSE, 1, 7, 0);   // R1 = P7 (huisje-richting)
-    // Extract dag-fase (bits 0-2)
-    encodeInstruction(g, 2, Opcode.MOVI, 2, 0, 7);     // R2 = 7 (mask)
-    encodeInstruction(g, 3, Opcode.AND, 3, 0, 2);      // R3 = dag-fase (0-4)
-    encodeInstruction(g, 4, Opcode.MOVI, 4, 0, 0);     // R4 = 0 (nul)
-    // Fase 0 (ochtend) → toren: ga Oost
-    encodeInstruction(g, 5, Opcode.CMP, 3, 4, 0);      // CMP dag-fase, 0
-    encodeInstruction(g, 6, Opcode.JZ, 0, 0, 18);      // fase 0 → toren (@18)
-    // Fase 1 (middag1) → puzzel: ga West
-    encodeInstruction(g, 7, Opcode.MOVI, 5, 0, 1);     // R5 = 1
-    encodeInstruction(g, 8, Opcode.CMP, 3, 5, 0);      // CMP dag-fase, 1
-    encodeInstruction(g, 9, Opcode.JZ, 0, 0, 21);      // fase 1 → puzzel (@21)
-    // Fase 2 (middag2) → bos: ga Oost
-    encodeInstruction(g, 10, Opcode.MOVI, 5, 0, 2);    // R5 = 2
-    encodeInstruction(g, 11, Opcode.CMP, 3, 5, 0);     // CMP dag-fase, 2
-    encodeInstruction(g, 12, Opcode.JZ, 0, 0, 24);     // fase 2 → bos (@24)
-    // Fase 3 (avond) → thuis: decodeer P7
-    encodeInstruction(g, 13, Opcode.MOVI, 5, 0, 3);    // R5 = 3
-    encodeInstruction(g, 14, Opcode.CMP, 3, 5, 0);     // CMP dag-fase, 3
-    encodeInstruction(g, 15, Opcode.JZ, 0, 0, 27);     // fase 3 → thuis (@27)
-    // Fase 4 (nacht) → thuis: decodeer P7
-    encodeInstruction(g, 16, Opcode.JMP, 0, 0, 27);    // fase 4 → thuis (@27)
-    // === TOREN (fase 0) ===
-    encodeInstruction(g, 17, Opcode.NOP, 0, 0, 0);     // padding
-    encodeInstruction(g, 18, Opcode.MOVI, 6, 0, 1);    // R6 = 1 (Oost - toren)
-    encodeInstruction(g, 19, Opcode.JMP, 0, 0, 34);    // ACT (@34)
-    // === PUZZEL (fase 1) ===
-    encodeInstruction(g, 20, Opcode.NOP, 0, 0, 0);     // padding
-    encodeInstruction(g, 21, Opcode.MOVI, 6, 0, 3);    // R6 = 3 (West - puzzel)
-    encodeInstruction(g, 22, Opcode.JMP, 0, 0, 34);    // ACT (@34)
-    // === BOS (fase 2) ===
-    encodeInstruction(g, 23, Opcode.NOP, 0, 0, 0);     // padding
-    encodeInstruction(g, 24, Opcode.MOVI, 6, 0, 1);    // R6 = 1 (Oost - bos)
-    encodeInstruction(g, 25, Opcode.JMP, 0, 0, 34);    // ACT (@34)
-    // === THUIS (fase 3-4): decodeer P7 ===
-    encodeInstruction(g, 26, Opcode.NOP, 0, 0, 0);     // padding
-    encodeInstruction(g, 27, Opcode.MOVI, 5, 0, 4);    // R5 = 4 (mask DX>0)
-    encodeInstruction(g, 28, Opcode.AND, 5, 1, 5);     // R5 = R1 & 4
-    encodeInstruction(g, 29, Opcode.CMP, 5, 4, 0);     // CMP R5, 0
-    encodeInstruction(g, 30, Opcode.JG, 0, 0, 32);     // DX>0 → Oost (@32)
-    encodeInstruction(g, 31, Opcode.MOVI, 6, 0, 3);    // R6 = 3 (West - thuis)
-    encodeInstruction(g, 32, Opcode.JMP, 0, 0, 34);    // ACT (@34)
-    encodeInstruction(g, 33, Opcode.MOVI, 6, 0, 1);    // R6 = 1 (Oost - thuis)
-    // === ACT ===
-    encodeInstruction(g, 34, Opcode.ACT, 0, 6, 0);     // ACT R6 (beweeg)
-    // Rest NOP — evolutie verbetert navigatie per dag-fase
-    for (let i = 35; i < PROG_LEN; i++) {
+    // Ecosystem "Brein": 4-in-1 multi-task — all 4 tasks simultaneously
+    // P0-P3: Homeostasis, P4-P7: Arena, P8-P11: Bitstream, P12-P15: Hardware
+    // R0: Homeostasis action, R1: Arena direction, R2: Bitstream prediction, R3: Hardware prediction
+    // Homeostasis: P0=temp, P1=queue, P2=energy, P3=temp-55
+    // Arena: P4=DX, P5=DY, P6=HX, P7=HY
+    // Bitstream: P8=bitCurr, P9=bitPrev, P10=tick&1, P11=popcount
+    // Hardware: P12=hwA, P13=hwB, P14=XOR, P15=mask
+    // Homeostasis strategy: temp > 55 → koelen(3), energy < 30 → rust(0), else → werk(1)
+    encodeInstruction(g, 0, Opcode.SENSE, 0, 0, 0);   // R0 = P0 (temp)
+    encodeInstruction(g, 1, Opcode.SENSE, 1, 2, 0);   // R1 = P2 (energy)
+    encodeInstruction(g, 2, Opcode.SENSE, 2, 3, 0);   // R2 = P3 (temp-55)
+    encodeInstruction(g, 3, Opcode.MOVI, 3, 0, 0);    // R3 = 0
+    encodeInstruction(g, 4, Opcode.CMP, 2, 3, 0);     // CMP temp-55 0
+    encodeInstruction(g, 5, Opcode.JLT, 0, 0, 9);     // temp <= 55 → check energy (@9)
+    encodeInstruction(g, 6, Opcode.MOVI, 4, 0, 3);    // R4 = 3 (koelen)
+    encodeInstruction(g, 7, Opcode.JMP, 0, 0, 12);    // → ACT homeo (@12)
+    encodeInstruction(g, 8, Opcode.MOVI, 4, 0, 1);    // R4 = 1 (werk)
+    encodeInstruction(g, 9, Opcode.MOVI, 3, 0, 30);   // R3 = 30
+    encodeInstruction(g, 10, Opcode.CMP, 1, 3, 0);    // CMP energy 30
+    encodeInstruction(g, 11, Opcode.JLT, 0, 0, 12);   // energy < 30 → rust(0)
+    encodeInstruction(g, 12, Opcode.MOVI, 4, 0, 0);   // R4 = 0 (rust)
+    // Arena: navigate toward nearest energy node
+    encodeInstruction(g, 13, Opcode.SENSE, 5, 4, 0);  // R5 = P4 (DX)
+    encodeInstruction(g, 14, Opcode.SENSE, 6, 5, 0);  // R6 = P5 (DY)
+    encodeInstruction(g, 15, Opcode.ABS, 7, 5, 0);    // R7 = |DX|
+    encodeInstruction(g, 16, Opcode.ABS, 0, 6, 0);    // R0 = |DY|
+    encodeInstruction(g, 17, Opcode.CMP, 7, 0, 0);    // CMP |DX| |DY|
+    encodeInstruction(g, 18, Opcode.JLT, 0, 0, 22);   // |DX| < |DY| → Y eerst (@22)
+    encodeInstruction(g, 19, Opcode.CMP, 5, 3, 0);    // CMP DX 0
+    encodeInstruction(g, 20, Opcode.JLT, 0, 0, 24);   // DX < 0 → West (@24)
+    encodeInstruction(g, 21, Opcode.MOVI, 5, 0, 1);   // R5 = 1 (Oost)
+    encodeInstruction(g, 22, Opcode.JMP, 0, 0, 26);   // → ACT arena (@26)
+    encodeInstruction(g, 23, Opcode.MOVI, 5, 0, 3);   // R5 = 3 (West)
+    encodeInstruction(g, 24, Opcode.JMP, 0, 0, 26);   // → ACT arena (@26)
+    encodeInstruction(g, 25, Opcode.MOVI, 5, 0, 0);   // R5 = 0 (Noord - fallback)
+    // Bitstream: predict (bitCurr ^ (bitPrev >> 1)) & 0x0F
+    encodeInstruction(g, 26, Opcode.SENSE, 6, 8, 0);  // R6 = P8 (bitCurr)
+    encodeInstruction(g, 27, Opcode.SENSE, 7, 9, 0);  // R7 = P9 (bitPrev)
+    encodeInstruction(g, 28, Opcode.SHR, 7, 7, 1);    // R7 = bitPrev >> 1
+    encodeInstruction(g, 29, Opcode.XOR, 6, 7, 0);    // R6 = bitCurr ^ (bitPrev >> 1)
+    encodeInstruction(g, 30, Opcode.MOVI, 0, 0, 15);  // R0 = 0x0F
+    encodeInstruction(g, 31, Opcode.AND, 6, 0, 0);    // R6 = R6 & 0x0F
+    // Hardware: predict ((hwA ^ hwB) + (dP0 >> 1)) & 0x0F
+    encodeInstruction(g, 32, Opcode.SENSE, 0, 12, 0); // R0 = P12 (hwA)
+    encodeInstruction(g, 33, Opcode.SENSE, 7, 13, 0); // R7 = P13 (hwB)
+    encodeInstruction(g, 34, Opcode.XOR, 0, 7, 0);    // R0 = hwA ^ hwB
+    encodeInstruction(g, 35, Opcode.MOVI, 7, 0, 15);  // R7 = 0x0F
+    encodeInstruction(g, 36, Opcode.AND, 0, 7, 0);    // R0 = R0 & 0x0F
+    // ACT: output all 4 actions via R0-R3
+    encodeInstruction(g, 37, Opcode.MOV, 0, 4, 0);    // R0 = homeo action
+    encodeInstruction(g, 38, Opcode.MOV, 1, 5, 0);    // R1 = arena direction
+    encodeInstruction(g, 39, Opcode.MOV, 2, 6, 0);    // R2 = bitstream prediction
+    encodeInstruction(g, 40, Opcode.MOV, 3, 0, 0);    // R3 = hardware prediction
+    encodeInstruction(g, 41, Opcode.ACT, 0, 0, 0);    // ACT R0 (homeo)
+    // Rest NOP
+    for (let i = 42; i < PROG_LEN; i++) {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else if (taskId === 'bitstream') {
@@ -2612,110 +2601,7 @@ export function createStarterGenome(taskId: TaskId): Uint8Array {
   return g;
 }
 
-// Ecosystem dispatcher: combines per-task genomes into one ecosystem genome.
-// The dispatcher is the "brain" — it reads the zone ID and routes to the correct sub-genome.
-// Slot layout (64 slots total):
-//   0-10:  dispatcher (read zone, jump to sub-genome)
-//   11-26: homeostasis sub-genome (16 slots)
-//   27-42: arena sub-genome (16 slots)
-//   43-54: bitstream sub-genome (12 slots)
-//   55-63: hardware sub-genome (9 slots)
-export function createEcosystemDispatcherGenome(
-  homeostasisGenome: Uint8Array | null,
-  arenaGenome: Uint8Array | null,
-  bitstreamGenome: Uint8Array | null,
-  hardwareGenome: Uint8Array | null
-): Uint8Array {
-  const g = new Uint8Array(PROG_LEN * 4);
-
-  // Fill with NOPs first
-  for (let i = 0; i < PROG_LEN; i++) {
-    encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
-  }
-
-  // === DISPATCHER (slots 0-10) ===
-  // Read zone ID from P6, then jump to the correct sub-genome
-  encodeInstruction(g, 0, Opcode.SENSE, 0, 6, 0);   // R0 = P6 (zone-ID: 0=house, 1=forest, 2=puzzle, 3=tower)
-  
-  // Check zone 0 (house)
-  encodeInstruction(g, 1, Opcode.MOVI, 1, 0, 0);     // R1 = 0
-  encodeInstruction(g, 2, Opcode.CMP, 0, 1, 0);      // CMP R0, R1 (zone vs 0)
-  encodeInstruction(g, 3, Opcode.JZ, 0, 0, 11);      // zone 0 → homeostasis (@11)
-
-  // Check zone 1 (forest)
-  encodeInstruction(g, 4, Opcode.MOVI, 1, 0, 1);     // R1 = 1
-  encodeInstruction(g, 5, Opcode.CMP, 0, 1, 0);      // CMP R0, R1 (zone vs 1)
-  encodeInstruction(g, 6, Opcode.JZ, 0, 0, 27);      // zone 1 → arena (@27)
-
-  // Check zone 2 (puzzle)
-  encodeInstruction(g, 7, Opcode.MOVI, 1, 0, 2);     // R1 = 2
-  encodeInstruction(g, 8, Opcode.CMP, 0, 1, 0);      // CMP R0, R1 (zone vs 2)
-  encodeInstruction(g, 9, Opcode.JZ, 0, 0, 43);      // zone 2 → bitstream (@43)
-
-  // Zone 3 (tower) — fallback
-  encodeInstruction(g, 10, Opcode.JMP, 0, 0, 55);    // zone 3 → hardware (@55)
-
-  // === COPY SUB-GENOMES ===
-  // Each sub-genome gets a fixed slot range. Copy non-NOP instructions from the trained genome.
-  // If no trained genome exists, use the starter genome as fallback.
-  // Total: 10 (dispatcher) + 16 + 16 + 12 + 9 = 63 slots (1 slot spare)
-
-  const subGenomes: Array<{ genome: Uint8Array; startSlot: number; maxSlots: number }> = [
-    { genome: homeostasisGenome || createStarterGenome('homeostasis'), startSlot: 11, maxSlots: 16 },
-    { genome: arenaGenome || createStarterGenome('arena'), startSlot: 27, maxSlots: 16 },
-    { genome: bitstreamGenome || createStarterGenome('bitstream'), startSlot: 43, maxSlots: 12 },
-    { genome: hardwareGenome || createStarterGenome('hardware'), startSlot: 55, maxSlots: 9 },
-  ];
-
-  // Jump opcodes that use imm as an absolute slot address — need offset adjustment
-  const jumpOpcodes = new Set([
-    Opcode.JMP, Opcode.JZ, Opcode.JNZ, Opcode.JLT,
-    Opcode.JGE, Opcode.JLE, Opcode.JG,
-  ]);
-
-  for (const { genome, startSlot, maxSlots } of subGenomes) {
-    // First pass: collect all non-NOP instructions and map old positions to new positions
-    const instructions: Array<{ readSlot: number; inst: Instruction }> = [];
-    for (let readSlot = 0; readSlot < PROG_LEN; readSlot++) {
-      const inst = decodeInstruction(genome, readSlot);
-      if (inst.opcode !== Opcode.NOP) {
-        instructions.push({ readSlot, inst });
-      }
-    }
-
-    // Build a map: old slot -> new slot for all jump targets
-    const slotMap: Map<number, number> = new Map();
-    for (let idx = 0; idx < instructions.length; idx++) {
-      slotMap.set(instructions[idx].readSlot, startSlot + idx);
-    }
-
-    // Second pass: write instructions with adjusted jump addresses
-    for (let idx = 0; idx < instructions.length && idx < maxSlots; idx++) {
-      const { inst } = instructions[idx];
-      const writeSlot = startSlot + idx;
-
-      let adjustedImm = inst.imm;
-      // If this is a jump opcode, adjust the target address
-      if (jumpOpcodes.has(inst.opcode)) {
-        const targetSlot = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
-        const newTarget = slotMap.get(targetSlot);
-        if (newTarget !== undefined) {
-          // Target was in this sub-genome — adjust to new position
-          adjustedImm = newTarget;
-        }
-        // If target was NOT in this sub-genome, keep original (jumps to dispatcher or other sub-genome)
-      }
-
-      encodeInstruction(g, writeSlot, inst.opcode, inst.dst, inst.src, adjustedImm);
-    }
-    // Fill remaining slots with NOP
-    for (let i = startSlot + Math.min(instructions.length, maxSlots); i < startSlot + maxSlots && i < PROG_LEN; i++) {
-      encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
-    }
-  }
-
-  return g;
-}
+// Ecosystem dispatcher removed — "Brein" mode processes all 4 tasks simultaneously.
 
 const HOMEOSTASIS_REGIMES = [
   { temp: 48, queue: 32, energy: 82 },
@@ -2782,117 +2668,81 @@ export function createInitialEnv(
     hwPrevA: hwStreamA,
     cameraActive: false,
     cameraGrid: null,
-    // Ecosystem defaults (overwritten when taskId === 'ecosystem')
-    ecoZone: -1,
-    ecoHouseX: 4,
-    ecoHouseY: 4,
-    ecoEnergyNodes: [],
-    ecoHazards: [],
+    // Ecosystem "Brein" defaults
+    ecoHomeoScore: 0,
+    ecoArenaScore: 0,
+    ecoBitScore: 0,
+    ecoHwScore: 0,
+    ecoHomeoAction: 0,
+    ecoArenaAction: 0,
+    ecoBitPrediction: 0,
+    ecoHwPrediction: 0,
+    ecoTemp: regime.temp,
+    ecoQueue: regime.queue,
+    ecoArenaX: 8,
+    ecoArenaY: 8,
+    ecoArenaNodes: [],
+    ecoArenaHazards: [],
     ecoBitCurr: 0,
     ecoBitPrev: 0,
     ecoHwStreamA: 0,
     ecoHwStreamB: 0,
-    ecoTemp: regime.temp,
-    ecoQueue: regime.queue,
-    ecoZoneScores: [0, 0, 0, 0],
-    ecoZoneWeights: [0.8, 1.0, 1.5, 1.5],
-    ecoTrail: [],
-    ecoNodesCollected: 0,
-    ecoHazardHits: 0,
-    ecoBitExactHits: 0,
-    ecoHwExactHits: 0,
-    ecoDayPhase: 0,
-    ecoDayProgress: 0,
-    ecoDayLength: 30,
-    ecoTargetZone: 3, // ochtend → toren
-    ecoRhythmHits: 0,
-    ecoMemoryShort: new Array(8).fill(0),
-    ecoMemoryLong: new Array(8).fill(0),
-    ecoMemoryIndex: 0,
-    ecoSleeping: false,
-    ecoSleepTicks: 0,
-    ecoConsolidationBonus: 0,
-    ecoDaysLived: 0,
-    // Zone-based evolution defaults
-    ecoEvolutionZone: 3, // start bij toren (ochtend)
-    ecoZoneGenerations: 0,
-    ecoZoneGenTarget: 300,
-    ecoZoneOrder: [3, 2, 1, 0, 0], // toren, puzzel, bos, thuis, thuis
-    ecoZonePhaseIndex: 0,
-    // MI-evolution ladder defaults
-    ecoMiStage: 0, // start bij stadium 0: Overleeft
+    ecoTickCount: 0,
+    ecoDayNumber: 1,
+    ecoTimeOfDay: 0,
+    ecoMiStage: 0,
     ecoMiStageGenerations: 0,
     ecoMiStageGenTarget: 300,
   };
 
-  // Ecosystem-specific initialization
+  // Ecosystem "Brein" initialization
   if (taskId === 'ecosystem') {
-    env.ecoHouseX = 4;
-    env.ecoHouseY = 4;
-    env.ecoEnergyNodes = [];
-    env.ecoHazards = [];
-    for (let i = 0; i < 6; i++) {
-      // Place energy nodes in forest zone (16-23, 0-7)
-      env.ecoEnergyNodes.push({ x: 16 + Math.floor(rng() * 8), y: Math.floor(rng() * 8) });
-    }
-    for (let i = 0; i < 4; i++) {
-      // Place hazards in forest zone
-      const hx = 16 + Math.floor(rng() * 8);
-      const hy = Math.floor(rng() * 8);
-      if (hx !== env.agentX || hy !== env.agentY) env.ecoHazards.push({ x: hx, y: hy });
-    }
-    env.ecoBitCurr = Math.floor(rng() * 16);
-    env.ecoBitPrev = Math.floor(rng() * 16);
-    env.ecoHwStreamA = Math.floor(rng() * 64);
-    env.ecoHwStreamB = Math.floor(rng() * 32);
+    // Homeostasis state
     env.ecoTemp = regime.temp;
     env.ecoQueue = regime.queue;
-    env.ecoZoneScores = [0, 0, 0, 0];
-    env.ecoZoneWeights = [0.8, 1.0, 1.5, 1.5];
-    env.ecoTrail = [{ x: 8, y: 8 }];
-    env.ecoNodesCollected = 0;
-    env.ecoHazardHits = 0;
-    env.ecoBitExactHits = 0;
-    env.ecoHwExactHits = 0;
-    // Day/night cycle initialization
-    // Ritme: ochtend→toren(3), middag1→puzzel(2), middag2→bos(1), avond→thuis(0), nacht→thuis(0)
-    env.ecoDayPhase = 0; // start bij ochtend
-    env.ecoDayProgress = 0;
-    env.ecoDayLength = 30; // 30 ticks per fase = 150 ticks per volledige dag
-    env.ecoTargetZone = 3; // ochtend → toren (hardware)
-    env.ecoRhythmHits = 0;
-    // Memory initialization
-    env.ecoMemoryShort = new Array(8).fill(0);
-    env.ecoMemoryLong = new Array(8).fill(0);
-    env.ecoMemoryIndex = 0;
-    env.ecoSleeping = false;
-    env.ecoSleepTicks = 0;
-    env.ecoConsolidationBonus = 0;
-    env.ecoDaysLived = 0;
-    // Zone-based evolution: start at tower (ochtend), 300 gens per zone
-    env.ecoEvolutionZone = 3;
-    env.ecoZoneGenerations = 0;
-    env.ecoZoneGenTarget = 300;
-    env.ecoZoneOrder = [3, 2, 1, 0, 0]; // toren, puzzel, bos, thuis, thuis
-    env.ecoZonePhaseIndex = 0;
-    // MI-evolution ladder: start at stage 0 (Overleeft)
+    // Arena virtual state
+    env.ecoArenaX = 8;
+    env.ecoArenaY = 8;
+    env.ecoArenaNodes = [];
+    env.ecoArenaHazards = [];
+    for (let i = 0; i < 6; i++) {
+      env.ecoArenaNodes.push({ x: Math.floor(rng() * 16), y: Math.floor(rng() * 16) });
+    }
+    for (let i = 0; i < 4; i++) {
+      const hx = Math.floor(rng() * 16);
+      const hy = Math.floor(rng() * 16);
+      if (hx !== env.ecoArenaX || hy !== env.ecoArenaY) {
+        env.ecoArenaHazards.push({ x: hx, y: hy });
+      }
+    }
+    // Bitstream state
+    env.ecoBitCurr = Math.floor(rng() * 16);
+    env.ecoBitPrev = Math.floor(rng() * 16);
+    // Hardware state
+    env.ecoHwStreamA = Math.floor(rng() * 64);
+    env.ecoHwStreamB = Math.floor(rng() * 32);
+    // Scores
+    env.ecoHomeoScore = 0;
+    env.ecoArenaScore = 0;
+    env.ecoBitScore = 0;
+    env.ecoHwScore = 0;
+    // Actions
+    env.ecoHomeoAction = 0;
+    env.ecoArenaAction = 0;
+    env.ecoBitPrediction = 0;
+    env.ecoHwPrediction = 0;
+    // Time
+    env.ecoTickCount = 0;
+    env.ecoDayNumber = 1;
+    env.ecoTimeOfDay = 0;
+    // MI stage
     env.ecoMiStage = 0;
     env.ecoMiStageGenerations = 0;
     env.ecoMiStageGenTarget = 300;
-    // Detect initial zone
-    env.ecoZone = getEcosystemZone(env.agentX, env.agentY);
   }
 
   updateEnvPorts(env);
   return env;
-}
-
-function getEcosystemZone(x: number, y: number): number {
-  if (x < 8 && y < 8) return 0; // House (top-left)
-  if (x >= 16 && y < 8) return 1; // Forest (top-right)
-  if (x < 8 && y >= 16) return 2; // Puzzle stones (bottom-left)
-  if (x >= 16 && y >= 16) return 3; // Sensor tower (bottom-right)
-  return -1; // Transition zone (between zones)
 }
 
 // Deep clone an EnvSnapshot so evolution can start from the current live state
@@ -2931,45 +2781,28 @@ export function cloneEnvSnapshot(src: EnvSnapshot): EnvSnapshot {
     hwPrevA: src.hwPrevA,
     cameraActive: src.cameraActive,
     cameraGrid: src.cameraGrid ? [...src.cameraGrid] : null,
-    // Ecosystem fields — preserve state for continuation
-    ecoZone: src.ecoZone,
-    ecoHouseX: src.ecoHouseX,
-    ecoHouseY: src.ecoHouseY,
-    ecoEnergyNodes: src.ecoEnergyNodes.map(n => ({ x: n.x, y: n.y })),
-    ecoHazards: src.ecoHazards.map(h => ({ x: h.x, y: h.y })),
+    // Ecosystem "Brein" fields — preserve state for continuation
+    ecoHomeoScore: 0, // Reset scores for fair evaluation
+    ecoArenaScore: 0,
+    ecoBitScore: 0,
+    ecoHwScore: 0,
+    ecoHomeoAction: src.ecoHomeoAction,
+    ecoArenaAction: src.ecoArenaAction,
+    ecoBitPrediction: src.ecoBitPrediction,
+    ecoHwPrediction: src.ecoHwPrediction,
+    ecoTemp: src.ecoTemp,
+    ecoQueue: src.ecoQueue,
+    ecoArenaX: src.ecoArenaX,
+    ecoArenaY: src.ecoArenaY,
+    ecoArenaNodes: src.ecoArenaNodes.map(n => ({ x: n.x, y: n.y })),
+    ecoArenaHazards: src.ecoArenaHazards.map(h => ({ x: h.x, y: h.y })),
     ecoBitCurr: src.ecoBitCurr,
     ecoBitPrev: src.ecoBitPrev,
     ecoHwStreamA: src.ecoHwStreamA,
     ecoHwStreamB: src.ecoHwStreamB,
-    ecoTemp: src.ecoTemp,
-    ecoQueue: src.ecoQueue,
-    ecoZoneScores: [...src.ecoZoneScores],
-    ecoZoneWeights: [...src.ecoZoneWeights],
-    ecoTrail: [], // Fresh trail for evaluation
-    ecoNodesCollected: 0,
-    ecoHazardHits: 0,
-    ecoBitExactHits: 0,
-    ecoHwExactHits: 0,
-    // Day/night cycle — preserve so evolution continues from current phase
-    ecoDayPhase: src.ecoDayPhase,
-    ecoDayProgress: src.ecoDayProgress,
-    ecoDayLength: src.ecoDayLength,
-    ecoTargetZone: src.ecoTargetZone,
-    ecoRhythmHits: 0, // Reset rhythm for fair evaluation
-    // Memory — preserve so evolution builds on existing knowledge
-    ecoMemoryShort: [...src.ecoMemoryShort],
-    ecoMemoryLong: [...src.ecoMemoryLong],
-    ecoMemoryIndex: src.ecoMemoryIndex,
-    ecoSleeping: false, // Wake up for evaluation
-    ecoSleepTicks: 0,
-    ecoConsolidationBonus: src.ecoConsolidationBonus,
-    ecoDaysLived: src.ecoDaysLived,
-    // Zone-based evolution — preserve state
-    ecoEvolutionZone: src.ecoEvolutionZone,
-    ecoZoneGenerations: src.ecoZoneGenerations,
-    ecoZoneGenTarget: src.ecoZoneGenTarget,
-    ecoZoneOrder: [...src.ecoZoneOrder],
-    ecoZonePhaseIndex: src.ecoZonePhaseIndex,
+    ecoTickCount: src.ecoTickCount,
+    ecoDayNumber: src.ecoDayNumber,
+    ecoTimeOfDay: src.ecoTimeOfDay,
     // MI-evolution ladder — preserve state
     ecoMiStage: src.ecoMiStage,
     ecoMiStageGenerations: src.ecoMiStageGenerations,
@@ -2977,26 +2810,8 @@ export function cloneEnvSnapshot(src: EnvSnapshot): EnvSnapshot {
   };
 }
 
-// Advance zone-based evolution: increment generation counter and switch zone if target reached
-// Returns true if the zone was switched
+// Advance zone-based evolution (kept for compatibility, no-op for "Brein")
 export function advanceEcoZoneEvolution(env: EnvSnapshot): boolean {
-  env.ecoZoneGenerations++;
-  if (env.ecoZoneGenerations >= env.ecoZoneGenTarget) {
-    // Switch to next zone in the order
-    env.ecoZonePhaseIndex++;
-    if (env.ecoZonePhaseIndex >= env.ecoZoneOrder.length) {
-      // Full day cycle complete — restart from beginning
-      env.ecoZonePhaseIndex = 0;
-      env.ecoDaysLived++;
-    }
-    env.ecoEvolutionZone = env.ecoZoneOrder[env.ecoZonePhaseIndex];
-    env.ecoZoneGenerations = 0;
-    // Update day phase to match the new zone
-    env.ecoDayPhase = env.ecoZonePhaseIndex;
-    env.ecoDayProgress = 0;
-    env.ecoTargetZone = env.ecoEvolutionZone;
-    return true;
-  }
   return false;
 }
 
@@ -3062,15 +2877,6 @@ export function advanceEcoMiStage(env: EnvSnapshot): boolean {
     env.ecoMiStageGenerations = 0;
     const oldStage = env.ecoMiStage;
     env.ecoMiStage = (env.ecoMiStage + 1) % 6;
-    // When completing a full cycle (stage 5 → 0), increment days lived
-    if (env.ecoMiStage === 0) {
-      env.ecoDaysLived++;
-    }
-    // Update evolution zone to match the MI stage (stages 0-3 map to zones)
-    if (env.ecoMiStage < 4) {
-      env.ecoEvolutionZone = env.ecoMiStage;
-      env.ecoTargetZone = env.ecoMiStage;
-    }
     return oldStage !== env.ecoMiStage;
   }
   return false;
@@ -3141,80 +2947,47 @@ export function updateEnvPorts(env: EnvSnapshot): void {
       env.tick & 0xff,
     ];
   } else if (env.taskId === 'ecosystem') {
-    // Ecosystem: zone-specific P0-P3 + general P4-P7
-    // In transition zone (-1), give sensors for the NEAREST zone so avatar is never blind
-    const zone = env.ecoZone;
-    const p0p3: number[] = [0, 0, 0, 0];
-    
-    // If in transition zone, find nearest zone center for sensors
-    const effectiveZone = zone >= 0 ? zone : (() => {
-      const centers = [{x:4,y:4}, {x:20,y:4}, {x:4,y:20}, {x:20,y:20}];
-      let minD = 999, minZ = 0;
-      for (let z = 0; z < 4; z++) {
-        const d = Math.abs(centers[z].x - env.agentX) + Math.abs(centers[z].y - env.agentY);
-        if (d < minD) { minD = d; minZ = z; }
+    // Ecosystem "Brein": 16 ports — all 4 tasks simultaneously
+    // P0-P3: Homeostasis, P4-P7: Arena, P8-P11: Bitstream, P12-P15: Hardware
+    // Arena sensors: find nearest energy node and hazard
+    let arenaDX = 0, arenaDY = 0, arenaHX = 0, arenaHY = 0;
+    if (env.ecoArenaNodes.length > 0) {
+      let bestNode = env.ecoArenaNodes[0];
+      let bestDist = 999;
+      for (const n of env.ecoArenaNodes) {
+        const d = Math.abs(n.x - env.ecoArenaX) + Math.abs(n.y - env.ecoArenaY);
+        if (d < bestDist) { bestDist = d; bestNode = n; }
       }
-      return minZ;
-    })();
-    
-    if (effectiveZone === 0) {
-      // House zone - homeostasis sensors
-      p0p3[0] = Math.round(env.ecoTemp);
-      p0p3[1] = Math.round(env.ecoQueue);
-      p0p3[2] = Math.round(env.ecoTemp - 55);
-      p0p3[3] = env.lastAction;
-    } else if (effectiveZone === 1) {
-      // Forest zone - arena sensors (energy nodes)
-      let bestNode = env.ecoEnergyNodes[0] || { x: 20, y: 4 };
-      let bestNodeDist = 999;
-      for (const n of env.ecoEnergyNodes) {
-        const d = Math.abs(n.x - env.agentX) + Math.abs(n.y - env.agentY);
-        if (d < bestNodeDist) { bestNodeDist = d; bestNode = n; }
-      }
-      let bestHaz = env.ecoHazards[0] || { x: 20, y: 4 };
-      let bestHazDist = 999;
-      for (const h of env.ecoHazards) {
-        const d = Math.abs(h.x - env.agentX) + Math.abs(h.y - env.agentY);
-        if (d < bestHazDist) { bestHazDist = d; bestHaz = h; }
-      }
-      p0p3[0] = bestNode.x - env.agentX;
-      p0p3[1] = bestNode.y - env.agentY;
-      p0p3[2] = bestHaz.x - env.agentX;
-      p0p3[3] = bestHaz.y - env.agentY;
-    } else if (effectiveZone === 2) {
-      // Puzzle stones - bitstream sensors
-      p0p3[0] = env.ecoBitCurr;
-      p0p3[1] = env.ecoBitPrev;
-      p0p3[2] = env.tick & 1;
-      p0p3[3] = popcount4(env.ecoBitCurr);
-    } else if (effectiveZone === 3) {
-      // Sensor tower - hardware bus sensors
-      p0p3[0] = env.ecoHwStreamA;
-      p0p3[1] = env.ecoHwStreamB;
-      p0p3[2] = (env.ecoHwStreamA ^ env.ecoHwStreamB) & 0xff;
-      p0p3[3] = env.hwMask;
+      arenaDX = bestNode.x - env.ecoArenaX;
+      arenaDY = bestNode.y - env.ecoArenaY;
     }
-    // General sensors P4-P7
-    const houseDX = env.ecoHouseX - env.agentX;
-    const houseDY = env.ecoHouseY - env.agentY;
-    // Encode house direction in P7: pack DX sign (bit 3) and DY sign (bit 2)
-    const houseDir = ((houseDX < 0 ? 8 : 0) | (houseDX > 0 ? 4 : 0) | (houseDY < 0 ? 2 : 0) | (houseDY > 0 ? 1 : 0));
-    // P5 = dag-fase (0-4) + dag-progress (bits 3-7) zodat avatar het ritme kan volgen
-    const daySensor = env.ecoDayPhase | (Math.floor(env.ecoDayProgress * 8) << 3);
-    // P6 = zone-ID + slaap-status (bit 3 = slapend)
-    const zoneSensor = Math.max(0, zone) | (env.ecoSleeping ? 8 : 0);
-    // P7 = huisje-richting + geheugen-info (bits 4-7 = aantal langetermijn kennis)
-    const knowledgeCount = env.ecoMemoryLong.filter(v => v !== 0).length;
-    const memorySensor = houseDir | (Math.min(15, knowledgeCount) << 4);
+    if (env.ecoArenaHazards.length > 0) {
+      let bestHaz = env.ecoArenaHazards[0];
+      let bestDist = 999;
+      for (const h of env.ecoArenaHazards) {
+        const d = Math.abs(h.x - env.ecoArenaX) + Math.abs(h.y - env.ecoArenaY);
+        if (d < bestDist) { bestDist = d; bestHaz = h; }
+      }
+      arenaHX = bestHaz.x - env.ecoArenaX;
+      arenaHY = bestHaz.y - env.ecoArenaY;
+    }
     env.ports = [
-      p0p3[0],
-      p0p3[1],
-      p0p3[2],
-      p0p3[3],
-      Math.round(env.energy),
-      daySensor & 0xff, // P5 = dag-fase + progress
-      zoneSensor & 0xff, // P6 = zone-ID + slaap-status
-      memorySensor & 0xff, // P7 = huisje-richting + geheugen-grootte
+      Math.round(env.ecoTemp),           // P0: Homeo Temp
+      Math.round(env.ecoQueue),           // P1: Homeo Queue
+      Math.round(env.energy),             // P2: Homeo Energy
+      Math.round(env.ecoTemp - 55),       // P3: Homeo Temp-delta
+      arenaDX,                            // P4: Arena DeltaX energy
+      arenaDY,                            // P5: Arena DeltaY energy
+      arenaHX,                            // P6: Arena DeltaX hazard
+      arenaHY,                            // P7: Arena DeltaY hazard
+      env.ecoBitCurr,                     // P8: Bitstream current
+      env.ecoBitPrev,                     // P9: Bitstream previous
+      env.tick & 1,                       // P10: Bitstream clock parity
+      popcount4(env.ecoBitCurr),          // P11: Bitstream popcount
+      env.ecoHwStreamA,                  // P12: Hardware channel A
+      env.ecoHwStreamB,                  // P13: Hardware channel B
+      (env.ecoHwStreamA ^ env.ecoHwStreamB) & 0x0f, // P14: Hardware XOR
+      env.hwMask,                         // P15: Hardware mask
     ];
   } else {
     // hardware
@@ -3432,402 +3205,97 @@ export function stepEnvironment(
       env.hwInputWord = (env.hwStreamA ^ env.hwStreamB ^ Math.floor(rng() * 16)) & 0xff;
     }
   } else if (env.taskId === 'ecosystem') {
-    // Ecosystem: zone-based sub-task with weighted rewards + day/night cycle
-    const prevZone = env.ecoZone;
-    const prevX = env.agentX; // Save old position for transition-zone distance comparison
-    const prevY = env.agentY;
-
-    // === Day/Night Cycle ===
-    // Ritme: ochtend→toren(3), middag1→puzzel(2), middag2→bos(1), avond→thuis(0), nacht→thuis(0)
-    // 5 fasen, elk ecoDayLength ticks (30 ticks per fase = 150 ticks per dag)
-    env.ecoDayProgress += 1 / env.ecoDayLength;
-    if (env.ecoDayProgress >= 1.0) {
-      env.ecoDayProgress = 0;
-      env.ecoDayPhase = (env.ecoDayPhase + 1) % 5;
+    // Ecosystem "Brein": all 4 tasks simultaneously — no zones, no avatar, no grid
+    // R0=homeostasis action, R1=arena action, R2=bitstream prediction, R3=hardware prediction
+    env.ecoTickCount++;
+    env.ecoTimeOfDay++;
+    if (env.ecoTimeOfDay >= 100) {
+      env.ecoTimeOfDay = 0;
+      env.ecoDayNumber++;
     }
-    // Target zone per dag-fase
-    const targetZones = [3, 2, 1, 0, 0]; // ochtend, middag1, middag2, avond, nacht
-    env.ecoTargetZone = targetZones[env.ecoDayPhase];
 
-    // Energy decreases per tick (meer 's nachts, minder overdag)
-    const energyDrain = env.ecoDayPhase === 4 ? 0.3 : 0.8; // nacht: minder energie verbruik
-    env.energy = Math.max(0, env.energy - energyDrain);
+    // === HOMEOSTASIS (weight ×0.8) ===
+    const hAct = ((rawAction >> 0) & 3);
+    env.ecoHomeoAction = hAct;
+    const incomingLoad = 4 + Math.floor(rng() * 6) + (env.tick % 9 === 0 ? 15 : 0);
+    if (disturbance.tempSpike) env.ecoTemp += disturbance.tempSpike;
+    if (disturbance.energyDip) env.energy -= disturbance.energyDip;
+    if (hAct === 0) { env.ecoTemp -= 5; env.energy += 8; env.ecoQueue += incomingLoad; }
+    else if (hAct === 1) { env.ecoTemp += 2; env.energy -= 3; env.ecoQueue += incomingLoad - 7; }
+    else if (hAct === 2) { env.ecoTemp += 7; env.energy -= 7.5; env.ecoQueue += incomingLoad - 16; }
+    else { env.ecoTemp -= 10; env.energy -= 4.5; env.ecoQueue += incomingLoad - 2; }
+    env.ecoTemp += (32 - env.ecoTemp) * 0.04;
+    env.ecoTemp = Math.max(15, Math.min(105, env.ecoTemp));
+    env.ecoQueue = Math.max(0, Math.min(100, env.ecoQueue));
+    env.energy = Math.max(0, Math.min(100, env.energy));
+    let homeoReward = 0;
+    if (env.ecoTemp >= 96 || env.energy <= 3) { homeoReward = -50; }
+    else {
+      homeoReward = Math.max(0, 12 - Math.abs(env.ecoTemp - 52) * 0.45)
+        + Math.max(0, 10 - env.ecoQueue * 0.22)
+        + (env.energy > 25 ? 6 : -8);
+    }
+    env.ecoHomeoScore += homeoReward * 0.8;
+    reward += homeoReward * 0.8;
 
-    // Navigation: avatar only moves when ACT is actually executed (didAct = true)
-    // If the genome is not loaded yet (all zeros), do NOT move — stay at start position
-    const act = rawAction;
-    env.lastAction = act;
-    let nx = env.agentX;
-    let ny = env.agentY;
+    // === ARENA (weight ×1.0) ===
+    const aAct = ((rawAction >> 2) & 3);
+    env.ecoArenaAction = aAct;
+    let arenaReward = 0;
+    let prevMinDist = 999;
+    for (const n of env.ecoArenaNodes) {
+      const d = Math.abs(n.x - env.ecoArenaX) + Math.abs(n.y - env.ecoArenaY);
+      if (d < prevMinDist) prevMinDist = d;
+    }
+    let anx = env.ecoArenaX, any_ = env.ecoArenaY;
+    if (aAct === 0) any_--; else if (aAct === 1) anx++; else if (aAct === 2) any_++; else anx--;
     let hitWall = false;
-    let navAct = 0; // default: no movement
-
-    // Avatar only moves when ACT is executed — if no ACT, stay in place
-    if (didAct) {
-      // Avatar moves only when the core explicitly calls ACT AND genome is loaded
-      navAct = ((act % 4) + 4) % 4;
-      if (navAct === 0) ny -= 1;
-      else if (navAct === 1) nx += 1;
-      else if (navAct === 2) ny += 1;
-      else nx -= 1;
-      if (nx < 0 || nx > 23 || ny < 0 || ny > 23) {
-        hitWall = true;
-        nx = Math.max(0, Math.min(23, nx));
-        ny = Math.max(0, Math.min(23, ny));
+    if (anx < 0 || anx > 15 || any_ < 0 || any_ > 15) { hitWall = true; anx = Math.max(0, Math.min(15, anx)); any_ = Math.max(0, Math.min(15, any_)); }
+    env.ecoArenaX = anx; env.ecoArenaY = any_;
+    if (hitWall) arenaReward -= 3.5;
+    let newMinDist = 999;
+    for (let i = 0; i < env.ecoArenaNodes.length; i++) {
+      if (env.ecoArenaNodes[i].x === anx && env.ecoArenaNodes[i].y === any_) {
+        env.energy = Math.min(100, env.energy + 25);
+        arenaReward += 30;
+        env.ecoArenaNodes[i] = { x: Math.floor(rng() * 16), y: Math.floor(rng() * 16) };
       }
-      env.agentX = nx;
-      env.agentY = ny;
-      env.ecoTrail.push({ x: nx, y: ny });
-      if (env.ecoTrail.length > 36) env.ecoTrail.shift();
+      const d = Math.abs(env.ecoArenaNodes[i].x - anx) + Math.abs(env.ecoArenaNodes[i].y - any_);
+      if (d < newMinDist) newMinDist = d;
     }
-
-    // Detect current zone based on avatar position
-    const newZone = getEcosystemZone(nx, ny);
-    env.ecoZone = newZone;
-
-    let zoneReward = 0;
-    let zoneIdx = -1;
-
-    if (newZone === 0) {
-      // === HOUSE ZONE: Homeostasis (weight ×0.8) ===
-      // Zone is ONLY active when avatar is inside — frozen otherwise
-      zoneIdx = 0;
-      // If no ACT, use default action (0 = Rust) for homeostasis
-      const hAct = didAct ? navAct : 0;
-      const incomingLoad = 4 + Math.floor(rng() * 6) + (env.tick % 9 === 0 ? 15 : 0);
-
-      if (disturbance.tempSpike) env.ecoTemp += disturbance.tempSpike;
-      if (disturbance.energyDip) env.energy -= disturbance.energyDip;
-
-      if (hAct === 0) {
-        env.ecoTemp -= 5;
-        env.energy += 8;
-        env.ecoQueue += incomingLoad;
-      } else if (hAct === 1) {
-        env.ecoTemp += 2.0;
-        env.energy -= 3.0;
-        env.ecoQueue += incomingLoad - 7;
-      } else if (hAct === 2) {
-        env.ecoTemp += 7.0;
-        env.energy -= 7.5;
-        env.ecoQueue += incomingLoad - 16;
-      } else {
-        env.ecoTemp -= 10;
-        env.energy -= 4.5;
-        env.ecoQueue += incomingLoad - 2;
-      }
-
-      env.ecoTemp += (32 - env.ecoTemp) * 0.04;
-      env.ecoTemp = Math.max(15, Math.min(105, env.ecoTemp));
-      env.ecoQueue = Math.max(0, Math.min(100, env.ecoQueue));
-      env.energy = Math.max(0, Math.min(100, env.energy));
-
-      if (env.ecoTemp >= 96 || env.energy <= 3) {
-        zoneReward = -50;
-      } else {
-        const tempScore = Math.max(0, 12 - Math.abs(env.ecoTemp - 52) * 0.45);
-        const queueScore = Math.max(0, 10 - env.ecoQueue * 0.22);
-        const energyScore = env.energy > 25 ? 6 : -8;
-        zoneReward = tempScore + queueScore + energyScore;
-      }
-    } else if (newZone === 1) {
-      // === FOREST ZONE: Arena foraging (weight ×1.0) ===
-      // Zone is ONLY active when avatar is inside — frozen otherwise
-      // Sub-task: foraging — ACT chooses direction to search for energy nodes
-      // Unlike other zones, forest rewards both navigation AND active foraging
-      zoneIdx = 1;
-
-      if (hitWall) zoneReward -= 3.5;
-
-      // === Foraging mechanic: avatar can "search" in a direction ===
-      // When ACT is called, the avatar searches in that direction for energy nodes
-      // This gives the genome something to do even when not on an energy node
-      let foraged = false;
-      if (didAct) {
-        // Search direction based on ACT value
-        const searchDir = navAct; // 0=Noord, 1=Oost, 2=Zuid, 3=West
-        // Check if there's an energy node in the search direction (within 2 steps)
-        for (let i = 0; i < env.ecoEnergyNodes.length; i++) {
-          const n = env.ecoEnergyNodes[i];
-          const dx = n.x - nx;
-          const dy = n.y - ny;
-          const dist = Math.abs(dx) + Math.abs(dy);
-          if (dist <= 2) {
-            // Check if search direction matches the node direction
-            let matches = false;
-            if (searchDir === 0 && dy < 0 && Math.abs(dy) >= Math.abs(dx)) matches = true;
-            if (searchDir === 1 && dx > 0 && Math.abs(dx) >= Math.abs(dy)) matches = true;
-            if (searchDir === 2 && dy > 0 && Math.abs(dy) >= Math.abs(dx)) matches = true;
-            if (searchDir === 3 && dx < 0 && Math.abs(dx) >= Math.abs(dy)) matches = true;
-            if (matches) {
-              // Found! Collect the energy node
-              env.ecoNodesCollected += 1;
-              env.energy = Math.min(100, env.energy + 25);
-              zoneReward += 30;
-              foraged = true;
-              // Respawn energy node in forest zone
-              env.ecoEnergyNodes[i] = { x: 16 + Math.floor(rng() * 8), y: Math.floor(rng() * 8) };
-            }
-          }
-        }
-        // Bonus for searching in the right direction (toward nearest node)
-        if (!foraged) {
-          let nearestDir = -1;
-          let nearestDist = 999;
-          for (const n of env.ecoEnergyNodes) {
-            const d = Math.abs(n.x - nx) + Math.abs(n.y - ny);
-            if (d < nearestDist) {
-              nearestDist = d;
-              // Determine direction to nearest node
-              const dx = n.x - nx;
-              const dy = n.y - ny;
-              if (Math.abs(dx) >= Math.abs(dy)) nearestDir = dx > 0 ? 1 : 3;
-              else nearestDir = dy > 0 ? 2 : 0;
-            }
-          }
-          if (nearestDir === searchDir) {
-            zoneReward += 5; // Bonus for searching toward nearest node
-          } else if (nearestDir >= 0) {
-            zoneReward += 1; // Small bonus for any active search
-          }
-        }
-      }
-
-      // Check if avatar is exactly on an energy node (direct collection)
-      for (let i = 0; i < env.ecoEnergyNodes.length; i++) {
-        const n = env.ecoEnergyNodes[i];
-        if (n.x === nx && n.y === ny && !foraged) {
-          env.ecoNodesCollected += 1;
-          env.energy = Math.min(100, env.energy + 25);
-          zoneReward += 30;
-          // Respawn energy node in forest zone
-          env.ecoEnergyNodes[i] = { x: 16 + Math.floor(rng() * 8), y: Math.floor(rng() * 8) };
-        }
-      }
-
-      // Navigation reward: moving toward nearest node
-      let prevMinDist = 999;
-      for (const n of env.ecoEnergyNodes) {
-        const d = Math.abs(n.x - prevX) + Math.abs(n.y - prevY);
-        if (d < prevMinDist) prevMinDist = d;
-      }
-      let newMinDist = 999;
-      for (const n of env.ecoEnergyNodes) {
-        const d = Math.abs(n.x - nx) + Math.abs(n.y - ny);
-        if (d < newMinDist) newMinDist = d;
-      }
-      zoneReward += (prevMinDist - newMinDist) * 2.5 + Math.max(0, 14 - newMinDist) * 0.45;
-
-      // Hazard check
-      for (const h of env.ecoHazards) {
-        if (h.x === nx && h.y === ny) {
-          env.ecoHazardHits += 1;
-          env.energy = Math.max(0, env.energy - 22);
-          zoneReward -= 18;
-        }
-      }
-    } else if (newZone === 2) {
-      // === PUZZLE STONES: Bitstream prediction (weight ×1.5) ===
-      zoneIdx = 2;
-      // If no ACT, use default prediction (0) instead of random register
-      const pred = didAct ? (act & 0x0f) : 0;
-      const target = (env.ecoBitCurr ^ (env.ecoBitPrev >> 1)) & 0x0f;
-      const bitErr = popcount4(pred ^ target);
-      const exact = pred === target;
-      if (exact) env.ecoBitExactHits += 1;
-      zoneReward = (4 - bitErr) * 4 + (exact ? 10 : 0);
-
-      // Advance bitstream
-      const nextByte = (Math.floor(rng() * 16) + (disturbance.loadSpike ? 7 : 0)) & 0x0f;
-      env.ecoBitPrev = env.ecoBitCurr;
-      env.ecoBitCurr = nextByte;
-    } else if (newZone === 3) {
-      // === SENSOR TOWER: Hardware bus prediction (weight ×1.5) ===
-      zoneIdx = 3;
-      // If no ACT, use default prediction (0) instead of random register
-      const pred = didAct ? (act & 0x0f) : 0;
-      const dP0 = env.ecoHwStreamA - (env.ecoHwStreamA - Math.floor(rng() * 10)); // approximate delta
-      const target = ((env.ecoHwStreamA ^ env.ecoHwStreamB) + (dP0 >> 1)) & 0x0f;
-      const bitErr = popcount4(pred ^ target);
-      const exact = pred === target;
-      if (exact) env.ecoHwExactHits += 1;
-      zoneReward = (4 - bitErr) * 4 + (exact ? 10 : 0);
-
-      // Advance hardware signals
-      const stepOsc = Math.round(32 + 24 * Math.sin(env.tick * 0.45 + (rng() - 0.5) * 0.6));
-      env.ecoHwStreamA = (stepOsc + (disturbance.loadSpike ?? 0)) & 0xff;
-      env.ecoHwStreamB = Math.floor(rng() * 32) ^ (env.ecoHwStreamA & 0x0f);
-    } else {
-      // === TRANSITION ZONE: between zones ===
-      // Reward navigation toward the target zone for current day phase
-      // This prevents the avatar from being penalized for moving between zones
-      const distToTarget = zoneDistance(nx, ny, env.ecoTargetZone);
-      const distToPrev = zoneDistance(prevX, prevY, env.ecoTargetZone);
-      
-      // Reward for moving closer to target zone
-      if (distToTarget < distToPrev) {
-        zoneReward += 4; // Moving toward target
-      } else if (distToTarget > distToPrev) {
-        zoneReward -= 2; // Moving away from target
-      }
-      
-      // Base reward for being close to any zone
-      const distToHouse = Math.abs(env.ecoHouseX - nx) + Math.abs(env.ecoHouseY - ny);
-      const distToForest = Math.abs(20 - nx) + Math.abs(4 - ny);
-      const distToPuzzle = Math.abs(4 - nx) + Math.abs(20 - ny);
-      const distToTower = Math.abs(20 - nx) + Math.abs(20 - ny);
-      const minZoneDist = Math.min(distToHouse, distToForest, distToPuzzle, distToTower);
-      zoneReward += Math.max(0, 6 - minZoneDist * 0.2);
-      
-      // Rhythm bonus in transition: reward for heading to the right zone
-      const prevDistHouse = Math.abs(env.ecoHouseX - prevX) + Math.abs(env.ecoHouseY - prevY);
-      const prevDistForest = Math.abs(20 - prevX) + Math.abs(4 - prevY);
-      const prevDistPuzzle = Math.abs(4 - prevX) + Math.abs(20 - prevY);
-      const prevDistTower = Math.abs(20 - prevX) + Math.abs(20 - prevY);
-      
-      if (env.ecoTargetZone === 0 && distToHouse < prevDistHouse) zoneReward += 3;
-      if (env.ecoTargetZone === 1 && distToForest < prevDistForest) zoneReward += 3;
-      if (env.ecoTargetZone === 2 && distToPuzzle < prevDistPuzzle) zoneReward += 3;
-      if (env.ecoTargetZone === 3 && distToTower < prevDistTower) zoneReward += 3;
+    arenaReward += (prevMinDist - newMinDist) * 2.5 + Math.max(0, 14 - newMinDist) * 0.45;
+    for (const h of env.ecoArenaHazards) {
+      if (h.x === anx && h.y === any_) { env.energy = Math.max(0, env.energy - 22); arenaReward -= 18; }
     }
+    env.ecoArenaScore += arenaReward;
+    reward += arenaReward;
 
-    // Apply zone weight — ONLY the current evolution zone gets rewarded
-    // Other zones are frozen until the evolution switches to them
-    if (zoneIdx >= 0) {
-      const isActiveZone = (zoneIdx === env.ecoEvolutionZone);
-      const weight = isActiveZone ? env.ecoZoneWeights[zoneIdx] : 0.0;
-      zoneReward *= weight;
-      if (isActiveZone) {
-        env.ecoZoneScores[zoneIdx] += zoneReward;
-      }
-    }
+    // === BITSTREAM (weight ×1.5) ===
+    const bPred = ((rawAction >> 4) & 0x0f);
+    env.ecoBitPrediction = bPred;
+    const bTarget = (env.ecoBitCurr ^ (env.ecoBitPrev >> 1)) & 0x0f;
+    const bErr = popcount4(bPred ^ bTarget);
+    const bExact = bPred === bTarget;
+    let bitReward = (4 - bErr) * 4 + (bExact ? 10 : 0);
+    env.ecoBitScore += bitReward * 1.5;
+    reward += bitReward * 1.5;
+    const nextByte = (Math.floor(rng() * 16) + (disturbance.loadSpike ? 7 : 0)) & 0x0f;
+    env.ecoBitPrev = env.ecoBitCurr;
+    env.ecoBitCurr = nextByte;
 
-    // Reward for returning to house zone
-    if (newZone === 0 && prevZone !== 0) {
-      zoneReward += 5; // Bonus for returning home
-    }
-
-    // Reward for zone change (exploration)
-    if (newZone !== prevZone && newZone >= 0 && prevZone >= 0) {
-      zoneReward += 2; // Small bonus for exploring new zones
-    }
-
-    // === Zone attraction: reward for being in the current evolution zone ===
-    // The evolution focuses on one zone at a time (300 generations per zone)
-    // Strong reward for being in the active zone, small reward for moving toward it
-    if (newZone === env.ecoEvolutionZone) {
-      zoneReward += 12; // Strong bonus for being in the active training zone
-      env.ecoRhythmHits += 1;
-    } else if (newZone >= 0 && newZone !== env.ecoEvolutionZone) {
-      // In a non-active zone: small penalty to encourage moving to the active zone
-      zoneReward -= 2;
-    }
-    // Always reward moving toward the evolution zone
-    const distToEvoZone = zoneDistance(nx, ny, env.ecoEvolutionZone);
-    const distPrevToEvoZone = zoneDistance(prevX, prevY, env.ecoEvolutionZone);
-    if (distToEvoZone < distPrevToEvoZone) {
-      zoneReward += 3; // Moving toward active zone
-    } else if (distToEvoZone > distPrevToEvoZone && newZone === -1) {
-      zoneReward -= 1; // Moving away in transition
-    }
-
-    // === House zone: eating/charging mechanic ===
-    if (newZone === 0) {
-      // In het huisje: energie opladen (eten)
-      const chargeRate = env.ecoDayPhase === 4 ? 3.0 : 1.5; // nacht: meer opladen
-      env.energy = Math.min(100, env.energy + chargeRate);
-      // Extra beloning voor homeostasis in het huisje 's avonds en 's nachts
-      if (env.ecoDayPhase >= 3) { // avond of nacht
-        zoneReward += 3; // Bonus voor thuis zijn op het juiste moment
-      }
-    }
-
-    // === Short-term memory: store experiences during the day ===
-    // Overdag (fase 0-3): avatar slaat ervaringen op in kortetermijn geheugen
-    // Elk 3 ticks wordt een ervaring opgeslagen: zone, energie, en resultaat
-    if (env.ecoDayPhase < 4 && env.tick % 3 === 0) {
-      // Encodeer ervaring: zone (4 bits) + energie/10 (4 bits) + reward teken (4 bits)
-      const expZone = Math.max(0, newZone) & 0x0f;
-      const expEnergy = Math.min(15, Math.floor(env.energy / 7)) & 0x0f;
-      const expReward = zoneReward > 0 ? 1 : (zoneReward < 0 ? 2 : 0);
-      const experience = (expZone << 4) | expEnergy | (expReward & 0x03);
-      
-      // Schrijf in kortetermijn geheugen (circular buffer)
-      env.ecoMemoryShort[env.ecoMemoryIndex % 8] = experience;
-      env.ecoMemoryIndex++;
-    }
-
-    // === Sleep & consolidation: night phase in house ===
-    // 's Nachts (fase 4) in het huisje: avatar slaapt en consolideert herinneringen
-    if (env.ecoDayPhase === 4 && newZone === 0) {
-      if (!env.ecoSleeping) {
-        env.ecoSleeping = true;
-        env.ecoSleepTicks = 0;
-      }
-      env.ecoSleepTicks++;
-      
-      // Na 4 ticks slapen: consolidatie begint
-      if (env.ecoSleepTicks >= 4) {
-        // Verwerk kortetermijn geheugen naar langetermijn
-        // De meest voorkomende ervaringen worden geconsolideerd
-        const counts = new Array(256).fill(0);
-        for (const exp of env.ecoMemoryShort) {
-          counts[exp]++;
-        }
-        
-        // Top 8 ervaringen gaan naar langetermijn geheugen
-        // (gewogen gemiddelde met bestaande langetermijn)
-        for (let i = 0; i < 8; i++) {
-          // Vind de meest voorkomende ervaring die nog niet in long-term zit
-          let bestExp = 0;
-          let bestCount = 0;
-          for (let e = 0; e < 256; e++) {
-            if (counts[e] > bestCount && !env.ecoMemoryLong.includes(e)) {
-              bestCount = counts[e];
-              bestExp = e;
-            }
-          }
-          if (bestCount > 0) {
-            // Consolideer: meng met bestaande waarde
-            const existingIdx = env.ecoMemoryLong.indexOf(0); // lege slot
-            const idx = existingIdx >= 0 ? existingIdx : i % 8;
-            env.ecoMemoryLong[idx] = bestExp;
-            counts[bestExp] = 0; // niet meer gebruiken
-          }
-        }
-        
-        // Consolideringsbonus: meer langetermijn kennis = meer bonus
-        const knowledgeCount = env.ecoMemoryLong.filter(v => v !== 0).length;
-        env.ecoConsolidationBonus = knowledgeCount * 0.5;
-        
-        // Kortetermijn geheugen wordt geleegd na consolidatie
-        env.ecoMemoryShort = new Array(8).fill(0);
-        env.ecoMemoryIndex = 0;
-      }
-      
-      // Extra energie tijdens slapen
-      env.energy = Math.min(100, env.energy + 1.5);
-    } else {
-      // Niet slapen (overdag of niet in huisje)
-      env.ecoSleeping = false;
-      env.ecoSleepTicks = 0;
-    }
-
-    // === Day transition: night → morning ===
-    const prevDayPhase = env.ecoDayPhase;
-    if (env.ecoDayPhase === 0 && prevDayPhase === 4) {
-      // Nieuwe dag!
-      env.ecoDaysLived++;
-      // Bonus voor geconsolideerde kennis
-      zoneReward += env.ecoConsolidationBonus;
-    }
-
-    // === Memory sensor bonus ===
-    // Als de avatar zijn geheugen gebruikt (via LOAD instructies), geef bonus
-    // Dit wordt gedetecteerd via de VM state (lastRamRead)
-    // De evolutie leert om LOAD te gebruiken om geheugen te raadplegen
-
-    reward += zoneReward;
+    // === HARDWARE (weight ×1.5) ===
+    const hwPred = ((rawAction >> 8) & 0x0f);
+    env.ecoHwPrediction = hwPred;
+    const hwDp0 = env.ecoHwStreamA - (env.ecoHwStreamA - Math.floor(rng() * 10));
+    const hwTarget = ((env.ecoHwStreamA ^ env.ecoHwStreamB) + (hwDp0 >> 1)) & 0x0f;
+    const hwErr = popcount4(hwPred ^ hwTarget);
+    const hwExact = hwPred === hwTarget;
+    let hwReward = (4 - hwErr) * 4 + (hwExact ? 10 : 0);
+    env.ecoHwScore += hwReward * 1.5;
+    reward += hwReward * 1.5;
+    const stepOsc = Math.round(32 + 24 * Math.sin(env.tick * 0.45 + (rng() - 0.5) * 0.6));
+    env.ecoHwStreamA = (stepOsc + (disturbance.loadSpike ?? 0)) & 0xff;
+    env.ecoHwStreamB = Math.floor(rng() * 32) ^ (env.ecoHwStreamA & 0x0f);
 
     if (env.energy <= 0) {
       env.alive = false;

@@ -561,13 +561,8 @@ export default function App() {
             history: [...preserved.history],
             trail: [...preserved.trail],
             bitStreamHistory: [...preserved.bitStreamHistory],
-            ecoZoneScores: [...preserved.ecoZoneScores],
-            ecoZoneWeights: [...preserved.ecoZoneWeights],
-            ecoEnergyNodes: preserved.ecoEnergyNodes.map(n => ({ x: n.x, y: n.y })),
-            ecoHazards: preserved.ecoHazards.map(h => ({ x: h.x, y: h.y })),
-            ecoTrail: [...preserved.ecoTrail],
-            ecoMemoryShort: [...preserved.ecoMemoryShort],
-            ecoMemoryLong: [...preserved.ecoMemoryLong],
+            ecoArenaNodes: preserved.ecoArenaNodes.map((n: {x:number;y:number}) => ({ x: n.x, y: n.y })),
+            ecoArenaHazards: preserved.ecoArenaHazards.map((h: {x:number;y:number}) => ({ x: h.x, y: h.y })),
           });
           syncVmToState();
         } else {
@@ -693,13 +688,8 @@ export default function App() {
       trail: [...envRef.current.trail],
       bitStreamHistory: [...envRef.current.bitStreamHistory],
       // Deep copy ecosystem arrays so React detects changes
-      ecoZoneScores: [...envRef.current.ecoZoneScores],
-      ecoZoneWeights: [...envRef.current.ecoZoneWeights],
-      ecoEnergyNodes: envRef.current.ecoEnergyNodes.map(n => ({ x: n.x, y: n.y })),
-      ecoHazards: envRef.current.ecoHazards.map(h => ({ x: h.x, y: h.y })),
-      ecoTrail: [...envRef.current.ecoTrail],
-      ecoMemoryShort: [...envRef.current.ecoMemoryShort],
-      ecoMemoryLong: [...envRef.current.ecoMemoryLong],
+      ecoArenaNodes: envRef.current.ecoArenaNodes.map((n: {x:number;y:number}) => ({ x: n.x, y: n.y })),
+      ecoArenaHazards: envRef.current.ecoArenaHazards.map((h: {x:number;y:number}) => ({ x: h.x, y: h.y })),
     });
     syncVmToState();
   }, [taskId, resetLivePreview, syncVmToState]);
@@ -1059,9 +1049,8 @@ export default function App() {
             for (const agent of topAgents) {
               try {
                 const testEnv = createInitialEnv('ecosystem', generationRef.current * 31 + z * 17 + 42, envRef.current.hwMask);
-                testEnv.agentX = z === 0 ? 4 : (z === 1 ? 20 : (z === 2 ? 4 : 20));
-                testEnv.agentY = z === 0 ? 4 : (z === 1 ? 4 : (z === 2 ? 20 : 20));
-                testEnv.ecoZone = z;
+                testEnv.ecoArenaX = z === 0 ? 4 : (z === 1 ? 20 : (z === 2 ? 4 : 20));
+                testEnv.ecoArenaY = z === 0 ? 4 : (z === 1 ? 4 : (z === 2 ? 20 : 20));
                 const result = evaluateAgentDetailed(agent.genome, 'ecosystem', generationRef.current * 31 + z * 17 + 42, 32, 6, {
                   allowSmc: allowSmcRef.current,
                   initialEnv: testEnv,

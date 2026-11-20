@@ -51,16 +51,12 @@
    - **Sensorpoorten (`P0..P7`)**: `P0` Kanaal A (Camera luma / Muis-dX / Gamepad as 0), `P1` Kanaal B (Camera-beweging / Muis-dY / Gamepad as 1), `P2` Invoerwoord (Toets/Muisknop/Lenscontrast), `P3` Hardware-capability-mask (`0x00..0xFF`), `P4` Signaal-delta (`dP0`), `P5` Vorige ACT-echo, `P6` Bus-entropie, `P7` Klok-tick.  
    - **Acties (`ACT`)**: onderste 4 bits (`waarde & 0x0F`) sturen de live bus-respons aan.
 
-5. **Ecosysteem (`ecosystem` — 4-in-1 gecombineerd + dag/nacht cyclus + geheugen)**  
-   Navigeer met een avatar door een **24×24 bos** met **4 zones** die elk een andere sub-taak trainen. De avatar ontvangt altijd alle 4 soorten sensoren, maar de huidige zone bepaalt welke sub-taak actief is. Moeilijke taken krijgen zwaardere beloning.  
-   - **Zones**: 🏠 Huisje (links-boven 0-7,0-7, homeostasis ×0.8), 🌲 Bos (rechts-boven 16-23,0-7, arena ×1.0), 🪨 Puzzelstenen (links-onder 0-7,16-23, bitstream ×1.5), 📡 Sensor-toren (rechts-onder 16-23,16-23, hardware ×1.5).  
-   - **Sensorpoorten (`P0..P7`)**: `P0..P3` Zone-specifieke sensoren, `P4` Energie (%), `P5` Dag-fase (0-4) + progress, `P6` Zone-ID + slaap-status, `P7` Huisje-richting + geheugen-grootte.  
-   - **Acties (`ACT`)**: `0..3` Zone-actie (homeostasis/arena), `0..15` Bit-voorspelling (bitstream/hardware).  
-   - **Dag/nacht cyclus**: 5 fasen × 12 ticks = 60 ticks per dag. Ritme: 🌅 ochtend→toren, ☀️ middag1→puzzel, 🌤️ middag2→bos, 🌇 avond→thuis, 🌙 nacht→thuis opladen. Rhythm bonus (+8) voor het volgen van het ritme.  
-   - **Geheugen-systeem**: Kortetermijn geheugen (8 slots) verzamelt ervaringen overdag (zone + energie + resultaat). 's Nachts in het huisje slaapt de avatar (💤) en consolideert de meest voorkomende ervaringen naar langetermijn geheugen (8 slots) — net zoals biologische hersenen. Elke nieuwe dag krijgt de avatar een bonus voor geconsolideerde kennis.  
-   - **Energie-systeem**: Energie vermindert per tick (0.8 overdag, 0.3 's nachts). In het huisje laadt de avatar op (eten): 1.5/tick overdag, 3.0/tick 's nachts. Avatar sterft bij energie ≤ 0.  
-   - **Fitness**: Gewogen som van alle sub-scores per tick. Navigatie naar huisje wordt extra beloond. Verkenning-bonus (+2) bij zone-wisseling.  
-   - **Rendering**: Blaxxun Interactive stijl — lichte pseudo-3D/isometrische 2D canvas rendering met dag-fase indicator, target zone highlight, slaap-indicator en geheugen-info. Pentium 3 compatible.
+5. **Brein (`ecosystem` — 4-in-1 gelijktijdig, geen avatar)**  
+   Alle 4 taken worden **tegelijk geëvalueerd** in één "brein" zonder avatar, zones of grid. De kern krijgt 16 sensoren en vult 4 registers per tick — geen ACT-oproep nodig. Dit is het fundament voor Machine Intelligence: één kern die alle vaardigheden combineert.  
+   - **Sensorpoorten (`P0..P15`)**: `P0..P3` Homeostasis (temp, queue, energy, temp-delta), `P4..P7` Arena (DeltaX energie, DeltaY energie, DeltaX hazard, DeltaY hazard), `P8..P11` Bitstream (bitCurr, bitPrev, klok-pariteit, popcount), `P12..P15` Hardware (kanaal A, kanaal B, XOR-signaal, mask).  
+   - **Acties (Registers)**: `R0` Homeostasis (0=Rust, 1=Werk, 2=Turbo, 3=Koelen), `R1` Arena (0=Noord, 1=Oost, 2=Zuid, 3=West), `R2` Bitstream (0-15 = 4-bit voorspelling), `R3` Hardware (0-15 = bus-respons).  
+   - **Fitness**: Som van alle 4 sub-scores, gewogen door MI-stadium (homeostasis ×0.8, arena ×1.0, bitstream ×1.5, hardware ×1.5).  
+   - **Dashboard**: Eén gecombineerd panel met 4 sub-panels (Homeostasis, Arena, Bitstream, Hardware) die live scores en acties tonen. MI-ladder toont het actieve stadium. Tijd en datum zichtbaar.
 
 ---
 
@@ -153,41 +149,28 @@ De repository bouwt schoon met standaard Vite (`npm run build` → output in `di
 
 ## Changelog
 
-### Versie 2.0 — Evolutie-algoritme & Multi-Worker (2026-11-20)
+### Versie 2.5 — Brein: Ecosysteem zonder zones (2026-11-20)
 
-**Nieuw:**
-- **Multi-Worker Parallelle Evolutie**: Alle beschikbare CPU-threads worden gebruikt voor parallelle evolutie via een Web Worker-pool. Elke worker evolueert een sub-populatie onafhankelijk; na elke generatie worden de resultaten samengevoegd.
-- **Handgeschreven Starter Genomes**: Elke hardware-omgeving beschikt over een handgeschreven start-genoom dat sensoren leest en doelgericht gedrag vertoont:
-  - *Arena*: Hazard-bewuste DeltaX/DeltaY navigator die `SENSE` gebruikt voor 4 sensoren (energiebron DX/DY + hazard DX/DY), eerst checkt of een hazard op het pad staat, en dan de grootste delta eerst aanpakt (Noord/Oost/Zuid/West).
-  - *Ecosysteem*: Navigeert naar het huisje-zone (homeostasis) als fallback, met zone-detectie via P6 (zone-ID) en huisje-richting via P7.
-  - *Homeostasis*: Thermische balans-strategie die temp/queue/energy leest en actie kiest op basis van drempels (koelen bij >55°C, opwarmen bij <45°C, rust bij lage energy).
-  - *Bitstream*: Directe implementatie van target-formule `(bitCurr ^ (bitPrev >> 1)) & 0x0F` in 7 instructies.
-  - *Hardware Bus*: Directe implementatie van target-formule `((A ^ B) + (dP0 >> 1)) & 0x0F` in 9 instructies.
-- **Verbeterd Evolutie-algoritme**:
-  - Toernooiselectie (size 5) vervangt rank-based selectie voor betere selectiedruk.
-  - SENSE-injectie: 40% kans per mutatie om een SENSE-instructie toe te voegen, dwingend sensor-gebruik.
-  - Gerichte mutatie: 30% kans op SENSE bij opcode mutatie in plaats van volledig willekeurige opcode.
-  - Adaptieve mutatie-rate: +0.04 in eerste 50 generaties voor meer exploratie.
-  - Fresh immigrants: 50% starter genome + mutatie, 50% random met SENSE-injectie.
-  - Crossover rate verhoogd naar 70% met single-point crossover.
-  - Populatiegrootte uitgebreid naar 256 kernen.
-- **Verbeterde C99 Trainer Export**:
-  - Populatie vergroot naar 256 (was 64).
-  - Toernooiselectie (size 5) in plaats van random selectie.
-  - Single-point crossover (70% rate).
-  - SENSE-injectie: 40% kans per generatie.
-  - Adaptieve mutatie: hogere rate (0.12) in eerste 50 generaties.
-  - 50% random genomes krijgen geforceerde SENSE op instructie 0/1.
+**Nieuw: "Brein" concept** — het ecosysteem is volledig herschreven zonder avatar, zones of grid. Alle 4 taken worden tegelijk geëvalueerd in één "brein" dat 16 sensoren leest en 4 registers vult per tick.
 
-**Fixes:**
-- **SENSE/PWRITE-injectie**: Injectie overschreef eerder willekeurige instructies, inclusief werkende starter genome-code. Zoekt nu alleen NOP-slots (lege instructies) om SENSE/PWRITE te injecteren, zodat de structuur van werkende genomes bewaard blijft.
-- **Arena control flow bug**: De Y-as navigatie (Noord/Zuid) was onbereikbaar door een `JLT` die naar de X-as West-fallback sprong in plaats van de Y-as logica. Vervangen door werkende 20-instructie DeltaX/DeltaY navigator met correcte X-as én Y-as navigatie.
-- **PWRITE-injectie**: Dezelfde fix als SENSE-injectie — gebruikt nu alleen NOP-slots om werkende code niet te vernietigen.
-- **Hardware detectie**: Worker count veranderd van `helft van CPU-threads` naar `alle beschikbare CPU-threads` voor maximale parallelle evolutie.
-- **PWRITE A/B-test bevestigd**: De A/B-test toont aan dat PWRITE (SMC) bij de arena-taak +25 punten fitness oplevert (226 vs 201) met gemiddeld 8.9 opcodes per run aangepast tijdens runtime. Bij de andere taken is PWRITE niet nodig omdat de starter genomes al optimaal zijn.
+**Hoe het werkt:**
+- **Geen avatar, geen zones, geen grid**: De kern staat op één plek en verwerkt alle signalen tegelijk
+- **16 sensoren (P0-P15)**: P0-P3 Homeostasis (temp, queue, energy, temp-delta), P4-P7 Arena (DeltaX/Y energie, DeltaX/Y hazard), P8-P11 Bitstream (bitCurr, bitPrev, klok, popcount), P12-P15 Hardware (kanaal A/B, XOR, mask)
+- **4 registers als acties**: R0 = Homeostasis (0-3), R1 = Arena (0-3), R2 = Bitstream (0-15), R3 = Hardware (0-15). Geen ACT-oproep nodig — de VM leest de registers automatisch per tick
+- **Fitness**: Som van alle 4 sub-scores, gewogen (homeostasis ×0.8, arena ×1.0, bitstream ×1.5, hardware ×1.5)
+- **Dashboard**: EcosystemCanvas toont 4 sub-panels in een 2×2 grid met live scores, acties en status per taak
 
-**Oorzaak:**
-- De evolutie liep vast in lokale optima waarbij kernen geen sensoren lasen en constant dezelfde actie uitvoerden (bijv. altijd "omlaag" in arena). Mutaties die SENSE toevoegden, verstoorden het patroon en sterven uit voordat een complete beslisboom kon groeien.
+**machineVm.ts:**
+- `EnvSnapshot`: Alle zone-gerelateerde velden verwijderd (ecoZone, ecoHouseX/Y, ecoEnergyNodes, ecoHazards, ecoDayPhase, ecoMemoryShort/Long, ecoSleeping, etc.)
+- Nieuwe velden: `ecoHomeoScore`, `ecoArenaScore`, `ecoBitScore`, `ecoHwScore`, `ecoHomeoAction`, `ecoArenaAction`, `ecoBitPrediction`, `ecoHwPrediction`
+- `updateEnvPorts`: 16 poorten (P0-P15) in plaats van 8 (P0-P7)
+- `stepEnvironment`: Gelijktijdige evaluatie van alle 4 taken, geen navigatie meer
+- `createStarterGenome`: Nieuw genome dat alle 4 taken behandelt (homeostasis temp/energy check, arena DeltaX/DY navigatie, bitstream XOR-predictie, hardware bus-predictie)
+
+**EcosystemCanvas.tsx:**
+- Volledig herschreven van 24×24 grid met avatar naar dashboard met 4 sub-panels
+- Elk panel toont: icoon, naam, live data, actie en score
+- MI-ladder en DNA-streng blijven zichtbaar in de header
 
 ### Versie 2.2 — Pentium Instructiesets & Genoom Uitbreiding (2026-11-20)
 
