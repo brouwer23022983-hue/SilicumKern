@@ -64,7 +64,7 @@
    - **GPU / Videokaart**: WebGPU adapter-detectie plus WebGL2/WebGL `WEBGL_debug_renderer_info` fallback (GPU-model en max. texture size).
    - **Invoer & Optisch (`Koppel camera-oog`)**: toetsenbord/muis, aangesloten gamepads, microfoons en webcam/camera (`8×8` live helderheids- & bewegingsmatrix op `P0..P2`). Alle gedetecteerde hardware wordt als 8-bit `capabilityMask` rechtstreeks op de VM-bus (`P3` / `P6`) aangeboden.
    - **Adaptieve AI-ruimte**: schakelt automatisch `128b` SIMD, cyclusbudget (`24` / `36` / `48`), Dual-Core Co-Processor Bus en populatiegrootte (`32`..`256` kernen).
-1. **Kies een hardware-omgeving** (*Thermische & Bus-Balans*, *2D Hardware-Signaalzoeker*, *Bit-Patroon Cortex* of *Open Hardware-Bus*).
+1. **Kies een hardware-omgeving** (*Thermische & Bus-Balans*, *2D Hardware-Signaalzoeker*, *Bit-Patroon Cortex*, *Open Hardware-Bus* of *Ecosysteem*).
 2. **Kies je register-breedte (`16b` / `32b` / `64b` / `128b`)** & **Cyclusbudget (`24` / `36` / `48`)**: handmatig aanpassen schakelt het profiel naar `HANDMATIG`; klik op `AUTO` om weer opnieuw te scannen.
 3. **Kies het startpunt van het genoom**:
    - **Vanaf 0 (Ruis)**: pure willekeurige bytes — laat ongebiaste, trace-geleide LGP-evolutie zelf gedrag uitvinden.
@@ -95,7 +95,7 @@ Open het tabblad **Benchmark** voor twee gecontroleerde wetenschappelijke proeve
 ### 4. Code-export (lokaal draaien zonder browser)
 Open het tabblad **Code-export** om je geëvolueerde 128-byte kernel direct te kopiëren of downloaden in 4 formaten:
 - **C99 Kern**: losse C-functie + `main()` inclusief `active_code[]` (SMC) en `bus[8]` (`gcc -O3 -march=native ... -o micro_ai`).
-- **C99 Volledige Trainer**: zelfstandige evolutie-trainer inclusief 44-opcode VM voor alle 4 taken (`homeostasis`, `arena`, `bitstream`, `hardware`) in pure C99. Geoptimaliseerd met populatie 256, toernooiselectie (size 5), single-point crossover (70%), SENSE-injectie (40%), adaptieve mutatie-rate en geforceerde SENSE-instructies voor arena-taak (`gcc -O3 -march=native ... -o trainer`).
+- **C99 Volledige Trainer**: zelfstandige evolutie-trainer inclusief 44-opcode VM voor 4 taken (`homeostasis`, `arena`, `bitstream`, `hardware`) in pure C99. Geoptimaliseerd met populatie 256, toernooiselectie (size 5), single-point crossover (70%), SENSE-injectie (40%), adaptieve mutatie-rate en geforceerde SENSE-instructies voor arena-taak (`gcc -O3 -march=native ... -o trainer`).
 - **x86-64 + SSE2 NASM**: directe 64-bit x86 assembly met echte `r8..r15` en `xmm0..xmm3` instructies, `MAX_CYCLES` lus-beveiliging en echte `BWRITE`/`BREAD` bus-opcodes (`nasm -f elf64 ... -o micro_ai.o`).
 - **Ruwe Hex**: ruwe `uint8_t[128]` hex-dump voor embedded/no-std C, Rust of bootloaders.
 
@@ -134,7 +134,8 @@ De repository bouwt schoon met standaard Vite (`npm run build` → output in `di
 **Nieuw:**
 - **Multi-Worker Parallelle Evolutie**: Alle beschikbare CPU-threads worden gebruikt voor parallelle evolutie via een Web Worker-pool. Elke worker evolueert een sub-populatie onafhankelijk; na elke generatie worden de resultaten samengevoegd.
 - **Handgeschreven Starter Genomes**: Elke hardware-omgeving beschikt over een handgeschreven start-genoom dat sensoren leest en doelgericht gedrag vertoont:
-  - *Arena*: DeltaX/DeltaY navigator die `SENSE` gebruikt, `|DX|` vs `|DY|` vergelijkt en de grootste delta eerst aanpakt (Noord/Oost/Zuid/West).
+  - *Arena*: Hazard-bewuste DeltaX/DeltaY navigator die `SENSE` gebruikt voor 4 sensoren (energiebron DX/DY + hazard DX/DY), eerst checkt of een hazard op het pad staat, en dan de grootste delta eerst aanpakt (Noord/Oost/Zuid/West).
+  - *Ecosysteem*: Navigeert naar het huisje-zone (homeostasis) als fallback, met zone-detectie via P6 (zone-ID) en huisje-richting via P7.
   - *Homeostasis*: Thermische balans-strategie die temp/queue/energy leest en actie kiest op basis van drempels (koelen bij >55°C, opwarmen bij <45°C, rust bij lage energy).
   - *Bitstream*: Directe implementatie van target-formule `(bitCurr ^ (bitPrev >> 1)) & 0x0F` in 7 instructies.
   - *Hardware Bus*: Directe implementatie van target-formule `((A ^ B) + (dP0 >> 1)) & 0x0F` in 9 instructies.
@@ -168,29 +169,33 @@ De repository bouwt schoon met standaard Vite (`npm run build` → output in `di
 
 **Nieuw:**
 - **Ecosysteem taak (`ecosystem`)**: Een 5de lab-test die alle 4 bestaande taken combineert in één 24×24 grid met 4 zones:
-  - 🏠 Huisje (links-boven): Homeostasis sub-taak (beloning ×0.8)
-  - 🌲 Bos (rechts-boven): Arena navigatie met energiebronnen (beloning ×1.0)
-  - 🪨 Puzzelstenen (links-onder): Bitstream voorspelling (beloning ×1.5)
-  - 📡 Sensor-toren (rechts-onder): Hardware bus voorspelling (beloning ×1.5)
-- **Zone-gebaseerde sensoren**: P0-P3 zijn zone-specifiek, P4-P7 zijn algemeen (energy, tick, zone-ID, huisje-richting).
-- **Gewogen beloning**: Moeilijke taken (bitstream, hardware) krijgen zwaardere beloning (×1.5), makkelijke taken (homeostasis) lichtere (×0.8).
-- **Terugkeer-mechanisme**: Extra beloning wanneer de avatar naar het huisje navigeert.
-- **Energie-systeem**: Energie vermindert per tick; avatar sterft bij energie ≤ 0.
-- **EcosystemCanvas renderer**: Blaxxun Interactive stijl — pseudo-3D/isometrische 2D canvas rendering met 4 gekleurde zones, avatar als kubus, huisje, bomen, puzzelstenen, sensor-toren, trail en energiebronnen. Pentium 3 compatible.
+  - 🏠 Huisje (links-boven, coördinaten 0-7, 0-7): Homeostasis sub-taak (beloning ×0.8). De avatar moet temperatuur, werklast en energie in balans houden.
+  - 🌲 Bos (rechts-boven, coördinaten 16-23, 0-7): Arena navigatie met energiebronnen (beloning ×1.0). De avatar verzamelt energiebronnen en vermijdt hazards.
+  - 🪨 Puzzelstenen (links-onder, coördinaten 0-7, 16-23): Bitstream voorspelling (beloning ×1.5). De avatar moet shift-XOR patronen decoderen.
+  - 📡 Sensor-toren (rechts-onder, coördinaten 16-23, 16-23): Hardware bus voorspelling (beloning ×1.5). De avatar voorspelt live bus-signalen.
+  - Tussen de zones in bevinden zich overgangsgebieden waar de avatar vrij kan navigeren.
+- **Zone-gebaseerde sensoren**: P0-P3 zijn zone-specifiek (afhankelijk van huidige zone), P4-P7 zijn algemeen (energy, tick, zone-ID, huisje-richting).
+- **Gewogen beloning**: Moeilijke taken (bitstream, hardware) krijgen zwaardere beloning (×1.5), makkelijke taken (homeostasis) lichtere (×0.8). De evolutie leert de avatar om naar de zwaarder beloonde zones te navigeren.
+- **Terugkeer-mechanisme**: Extra beloning (+5) wanneer de avatar naar het huisje navigeert, moedigt terugkeer naar de veilige zone aan.
+- **Verkenning-bonus**: Kleine beloning (+2) bij zone-wisseling, moedigt exploratie van alle 4 zones aan.
+- **Energie-systeem**: Energie vermindert 0.8 per tick; avatar sterft bij energie ≤ 0. Energiebronnen in het bos (+25) en rusten in het huisje (+8) herstellen energie.
+- **EcosystemCanvas renderer**: Blaxxun Interactive stijl — lichte pseudo-3D/isometrische 2D canvas rendering met 4 gekleurde zones, avatar als kubus, huisje, bomen, puzzelstenen, sensor-toren, trail en energiebronnen. Pentium 3 compatible, geen WebGL.
+- **Hazard-bewuste Arena starter genome**: De arena starter genome is uitgebreid met hazard-detectie: leest 4 sensoren (energiebron DX/DY + hazard DX/DY), checkt of een hazard op het pad staat, en kiest alternatieve richting bij gevaar.
 
 ### Versie 1.0 — Initiële Release
 
 **Features:**
 - 44 hardware-opcodes: Data & ALU, Bit-manipulatie, Flow & Geheugen, 128-bit SIMD, Sensor & Actuator I/O, Self-Modifying Code & Multi-Core Bus.
-- 4 hardware-omgevingen: homeostasis, arena, bitstream, hardware.
+- 5 hardware-omgevingen: homeostasis, arena, bitstream, hardware, ecosystem.
 - Authentic bitbreedtes: 16/32/64/128-bit met integer overflow semantiek.
 - Automatische hardware- en randapparatuur-detectie.
 - Adaptieve AI-ruimte: automatische aanpassing van SIMD, cyclusbudget, populatiegrootte op basis van hardware.
 - Self-Modifying Code (SMC) met Lamarckiaanse overerving.
 - Dual-Core Co-Processor Bus voor co-evoluerende populaties.
 - Code-export: C99 kern, C99 trainer, x86-64 NASM, ruwe hex.
-- Web Worker voor non-blocking evolutie.
+- Web Worker-pool voor non-blocking parallelle evolutie.
 - Benchmark & validatie: 100-seed generalisatie en A/B-test PWRITE.
 - Live machinetaal-genoom editor.
 - Hardware-storing injectie.
+- EcosystemCanvas renderer: Blaxxun Interactive stijl pseudo-3D rendering.
 - localStorage persistentie.
