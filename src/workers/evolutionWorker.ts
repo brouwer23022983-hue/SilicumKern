@@ -5,8 +5,10 @@ import {
   GeneralizationResult,
   SmcAbResult,
   TaskId,
-  createStarterGenome,
+  evaluateAgentDetailed,
+  evaluatePopulationSlice,
   evolveGeneration,
+  getEvolutionEvalParams,
   runGeneralizationBenchmark,
   runSmcAbExperiment,
 } from '../engine/machineVm';
@@ -24,9 +26,10 @@ export interface WorkerSyncPayload {
   inheritSmc: boolean;
   dualCore: boolean;
   maxCycles: number;
-  // Multi-worker ondersteuning: elke worker krijgt een sub-populatie
-  workerIndex?: number;      // Index van deze worker (0-based)
-  totalWorkers?: number;     // Totaal aantal workers in de pool
+  fromScratch?: boolean;
+  // Multi-worker ondersteuning: elke worker krijgt een sub-populatie (standalone mode)
+  workerIndex?: number;
+  totalWorkers?: number;
   // Ecosystem: start evolutie vanaf huidige live-omgeving
   initialEnv?: EnvSnapshot | null;
 }
@@ -40,6 +43,7 @@ export interface WorkerUpdateParamsPayload {
   inheritSmc: boolean;
   dualCore: boolean;
   maxCycles: number;
+  fromScratch?: boolean;
 }
 
 export type WorkerRequest =
@@ -48,6 +52,32 @@ export type WorkerRequest =
   | { type: 'step'; sessionId: number }
   | { type: 'start'; sessionId: number }
   | { type: 'stop' }
+  | {
+      type: 'eval-slice';
+      sessionId: number;
+      requestId: number;
+      slice: Agent[];
+      taskId: TaskId;
+      generation: number;
+      bitWidth: BitWidth;
+      allowSmc: boolean;
+      inheritSmc: boolean;
+      coGenome: Uint8Array | null;
+      maxCycles: number;
+      initialEnv?: EnvSnapshot | null;
+    }
+  | {
+      type: 'eval-co-slice';
+      sessionId: number;
+      requestId: number;
+      slice: Agent[];
+      primaryGenome: Uint8Array;
+      taskId: TaskId;
+      generation: number;
+      bitWidth: BitWidth;
+      allowSmc: boolean;
+      maxCycles: number;
+    }
   | {
       type: 'benchmark-gen';
       requestId: number;
@@ -85,6 +115,19 @@ export type WorkerResponse =
       coGenome: Uint8Array | null;
     }
   | {
+      type: 'slice-result';
+      sessionId: number;
+      requestId: number;
+      evaluated: Agent[];
+      activeSlotsByAgent: number[][];
+    }
+  | {
+      type: 'co-slice-result';
+      sessionId: number;
+      requestId: number;
+      evaluated: Agent[];
+    }
+  | {
       type: 'benchmark-gen-result';
       requestId: number;
       result: GeneralizationResult;
@@ -109,10 +152,11 @@ let bitWidth: BitWidth = 64;
 let allowSmc = true;
 let inheritSmc = false;
 let dualCore = false;
-let maxCycles = 24;
-let workerIndex = 0;         // Index van deze worker in de pool
-let totalWorkers = 1;        // Totaal aantal workers
-let initialEnv: EnvSnapshot | null = null;  // Ecosystem: start state for evolution
+let maxCycles = 36;
+let fromScratch = true;
+let workerIndex = 0;
+let totalWorkers = 1;
+let initialEnv: EnvSnapshot | null = null;
 
 let isRunning = false;
 let loopTimer: ReturnType<typeof setTimeout> | null = null;
@@ -134,6 +178,7 @@ function executeOneGeneration() {
     coPopulation,
     maxCycles,
     initialEnv,
+    fromScratch,
   });
 
   population = res.nextPopulation;
@@ -181,8 +226,8 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       inheritSmc = msg.inheritSmc;
       dualCore = msg.dualCore;
       maxCycles = msg.maxCycles;
+      if (msg.fromScratch !== undefined) fromScratch = msg.fromScratch;
       initialEnv = msg.initialEnv ?? null;
-      // Multi-worker: extraheer sub-populatie voor deze worker
       workerIndex = msg.workerIndex ?? 0;
       totalWorkers = msg.totalWorkers ?? 1;
       const allPop = msg.population.map((a) => ({
@@ -195,7 +240,6 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
             genome: new Uint8Array(a.genome),
           }))
         : null;
-      // Verdeel populatie over workers: elke worker krijgt zijn eigen slice
       const popPerWorker = Math.ceil(allPop.length / totalWorkers);
       const popStart = workerIndex * popPerWorker;
       const popEnd = Math.min(popStart + popPerWorker, allPop.length);
@@ -214,6 +258,69 @@ self.addEventListener('message', (event: MessageEvent<WorkerRequest>) => {
       inheritSmc = msg.inheritSmc;
       dualCore = msg.dualCore;
       maxCycles = msg.maxCycles;
+      if (msg.fromScratch !== undefined) fromScratch = msg.fromScratch;
+      break;
+    }
+    case 'eval-slice': {
+      const clonedSlice: Agent[] = msg.slice.map((a) => ({
+        ...a,
+        genome: new Uint8Array(a.genome),
+      }));
+      const { evaluated, activeSlotsByAgent } = evaluatePopulationSlice(
+        clonedSlice,
+        msg.taskId,
+        msg.generation,
+        msg.bitWidth,
+        {
+          allowSmc: msg.allowSmc,
+          inheritSmc: msg.inheritSmc,
+          coGenome: msg.coGenome ? new Uint8Array(msg.coGenome) : null,
+          maxCycles: msg.maxCycles,
+          initialEnv: msg.initialEnv ?? null,
+        }
+      );
+      workerScope.postMessage({
+        type: 'slice-result',
+        sessionId: msg.sessionId,
+        requestId: msg.requestId,
+        evaluated,
+        activeSlotsByAgent,
+      });
+      break;
+    }
+    case 'eval-co-slice': {
+      const { evalSeeds, evalTicks } = getEvolutionEvalParams(msg.taskId, msg.generation);
+      const primaryChamp = new Uint8Array(msg.primaryGenome);
+      const evaluated: Agent[] = msg.slice.map((co) => {
+        const coGenome = new Uint8Array(co.genome);
+        let totalCoScore = 0;
+        for (let s = 0; s < evalSeeds.length; s++) {
+          totalCoScore += evaluateAgentDetailed(
+            primaryChamp,
+            msg.taskId,
+            evalSeeds[s],
+            msg.bitWidth,
+            evalTicks,
+            {
+              allowSmc: msg.allowSmc,
+              coGenome,
+              maxCycles: msg.maxCycles,
+            }
+          ).score;
+        }
+        return {
+          id: co.id,
+          genome: coGenome,
+          fitness: totalCoScore / evalSeeds.length,
+          generationBorn: co.generationBorn,
+        };
+      });
+      workerScope.postMessage({
+        type: 'co-slice-result',
+        sessionId: msg.sessionId,
+        requestId: msg.requestId,
+        evaluated,
+      });
       break;
     }
     case 'step': {

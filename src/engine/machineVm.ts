@@ -775,7 +775,7 @@ export function decodeInstruction(genome: Uint8Array, index: number): Instructio
   const base = (index % PROG_LEN) * 4;
   const rawOp = genome[base] % OPCODE_COUNT;
   const dst = genome[base + 1] & 7;
-  const src = genome[base + 2] & 7;
+  const src = rawOp === Opcode.SENSE ? (genome[base + 2] & 15) : (genome[base + 2] & 7);
   const rawImm = genome[base + 3];
   const imm = rawImm > 127 ? rawImm - 256 : rawImm;
   return { opcode: rawOp as Opcode, dst, src, imm };
@@ -792,7 +792,7 @@ export function encodeInstruction(
   const base = (index % PROG_LEN) * 4;
   genome[base] = opcode % OPCODE_COUNT;
   genome[base + 1] = dst & 7;
-  genome[base + 2] = src & 7;
+  genome[base + 2] = opcode === Opcode.SENSE ? (src & 15) : (src & 7);
   genome[base + 3] = ((imm | 0) + 256) & 0xff;
 }
 
@@ -852,7 +852,7 @@ export function disassembleInstruction(inst: Instruction): string {
     case Opcode.VADD: return `VADD ${xd}, ${xs}`;
     case Opcode.VXOR: return `VXOR ${xd}, ${xs}`;
     case Opcode.VSUM: return `VSUM ${rd}, ${xs}`;
-    case Opcode.SENSE: return `SENSE ${rd}, P${inst.src & 7}`;
+    case Opcode.SENSE: return `SENSE ${rd}, P${inst.src & 15}`;
     case Opcode.ACT: return `ACT ${rs}`;
     case Opcode.PREAD: return `PREAD ${rd}, [${rs}]`;
     case Opcode.PWRITE: return `PWRITE [${rd}], ${rs}`;
@@ -1030,6 +1030,8 @@ export function disassembleInstruction(inst: Instruction): string {
 export interface VMExecOptions {
   allowSmc?: boolean;
   sharedBus?: Int32Array;
+  taskId?: TaskId;
+  recordSmcLog?: boolean;
 }
 
 export function stepSingleInstruction(
@@ -1240,7 +1242,7 @@ export function stepSingleInstruction(
       break;
     }
     case Opcode.SENSE: {
-      const port = inst.src & 7;
+      const port = ports.length > 8 ? (inst.src & 15) : (inst.src & 7);
       vm.regs[inst.dst] = maskSigned(BigInt((ports[port] ?? 0) | 0), bitWidth);
       break;
     }
@@ -1263,29 +1265,28 @@ export function stepSingleInstruction(
       if (options.allowSmc) {
         const pIdx = Number(maskUnsigned(rdVal, bitWidth) & BigInt(PROG_LEN - 1));
         const base = pIdx * 4;
-        // Log de OUDЕ instructie VOOR het overschrijven
-        const oldInst = decodeInstruction(vm.activeCode, pIdx);
-        const oldMnemonic = disassembleInstruction(oldInst);
+        const shouldLog = options.recordSmcLog !== false;
+        const oldMnemonic = shouldLog
+          ? disassembleInstruction(decodeInstruction(vm.activeCode, pIdx))
+          : '';
 
         const packed = Number(BigInt.asUintN(32, rsVal));
         vm.activeCode[base] = (packed & 0xff) % OPCODE_COUNT;
         vm.activeCode[base + 1] = ((packed >> 8) & 0xff) & 7;
-        vm.activeCode[base + 2] = ((packed >> 16) & 0xff) & 7;
+        vm.activeCode[base + 2] = ((packed >> 16) & 0xff) & 15;
         vm.activeCode[base + 3] = (packed >> 24) & 0xff;
         vm.smcModified[pIdx] = 1;
 
-        // Log de NIEUWE instructie NA het herschrijven
-        const newInst = decodeInstruction(vm.activeCode, pIdx);
-        const newMnemonic = disassembleInstruction(newInst);
-
-        // Sla op in smcLog (max 50 entries)
-        vm.smcLog.push({
-          tick: vm.cyclesUsed,
-          slot: pIdx,
-          oldMnemonic,
-          newMnemonic,
-        });
-        if (vm.smcLog.length > 50) vm.smcLog.shift();
+        if (shouldLog) {
+          const newMnemonic = disassembleInstruction(decodeInstruction(vm.activeCode, pIdx));
+          vm.smcLog.push({
+            tick: vm.cyclesUsed,
+            slot: pIdx,
+            oldMnemonic,
+            newMnemonic,
+          });
+          if (vm.smcLog.length > 50) vm.smcLog.shift();
+        }
       }
       break;
     }
@@ -2279,30 +2280,30 @@ export function stepSingleInstruction(
     }
     // === Extra Flow & Memory ===
     case Opcode.JGE: {
-      if (!vm.cf || vm.sf || vm.zf) {
+      if (!vm.cf && !vm.sf) {
         vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
         jumped = true;
       }
       break;
     }
     case Opcode.JLE: {
-      if (vm.cf !== vm.sf || vm.zf) {
+      if (vm.cf || vm.sf || vm.zf) {
         vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
         jumped = true;
       }
       break;
     }
     case Opcode.JG: {
-      if (!vm.zf && vm.cf === vm.sf) {
+      if (!vm.zf && !vm.cf && !vm.sf) {
         vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
         jumped = true;
       }
       break;
     }
     case Opcode.CALL: {
-      // Push current IP onto stack (RAM)
+      // Push return address (next instruction) onto stack (RAM)
       const sp = Number(vm.regs[7] & BigInt(RAM_WORDS - 1));
-      vm.ram[sp] = BigInt(idx);
+      vm.ram[sp] = BigInt((idx + 1) % PROG_LEN);
       vm.regs[7] = maskSigned(BigInt((sp + 1) % RAM_WORDS), bitWidth);
       vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
       jumped = true;
@@ -2337,9 +2338,9 @@ export function stepSingleInstruction(
       switch (inst.opcode) {
         case Opcode.CMOVE: cond = vm.zf; break;
         case Opcode.CMOVNE: cond = !vm.zf; break;
-        case Opcode.CMOVGE: cond = !vm.cf || vm.sf || vm.zf; break;
-        case Opcode.CMOVLE: cond = vm.cf !== vm.sf || vm.zf; break;
-        case Opcode.CMOVG: cond = !vm.zf && vm.cf === vm.sf; break;
+        case Opcode.CMOVGE: cond = !vm.cf && !vm.sf; break;
+        case Opcode.CMOVLE: cond = vm.cf || vm.sf || vm.zf; break;
+        case Opcode.CMOVG: cond = !vm.zf && !vm.cf && !vm.sf; break;
       }
       if (cond) vm.regs[inst.dst] = maskSigned(rsVal, bitWidth);
       break;
@@ -2388,7 +2389,14 @@ export function runVMTick(
       break;
     }
   }
-  if (!didAct) {
+  if (options.taskId === 'ecosystem') {
+    const r0 = Number(BigInt.asIntN(32, vm.regs[0])) & 3;
+    const r1 = Number(BigInt.asIntN(32, vm.regs[1])) & 3;
+    const r2 = Number(BigInt.asIntN(32, vm.regs[2])) & 0x0f;
+    const r3 = Number(BigInt.asIntN(32, vm.regs[3])) & 0x0f;
+    vm.out = r0 | (r1 << 2) | (r2 << 4) | (r3 << 8);
+    didAct = true;
+  } else if (!didAct) {
     vm.out = Number(BigInt.asIntN(32, vm.regs[0]));
   }
 
@@ -2479,8 +2487,11 @@ const BASIC_CPU_OPS: Opcode[] = [
   Opcode.ACT,
 ];
 
-function sampleNeutralCpuOpcode(rng: () => number): Opcode {
-  if (rng() < 0.65) {
+function sampleNeutralCpuOpcode(rng: () => number, bitWidth: BitWidth = 64): Opcode {
+  // Keep scalar I/O & control-flow well-represented so genomes reliably sense & act
+  // without diluting into 212 vector-only opcodes, while still allowing SIMD exploration at 128b
+  const basicProb = bitWidth === 128 ? 0.80 : 0.90;
+  if (rng() < basicProb) {
     return BASIC_CPU_OPS[Math.floor(rng() * BASIC_CPU_OPS.length)];
   }
   return Math.floor(rng() * OPCODE_COUNT) as Opcode;
@@ -2488,20 +2499,23 @@ function sampleNeutralCpuOpcode(rng: () => number): Opcode {
 
 export function createRandomGenome(
   rng: () => number,
-  _bitWidth: BitWidth = 32,
-  _options: { dualCore?: boolean; isCoCore?: boolean; forceSense?: boolean } = {}
+  bitWidth: BitWidth = 32,
+  options: { dualCore?: boolean; isCoCore?: boolean; forceSense?: boolean; portCount?: number } = {}
 ): Uint8Array {
   const g = new Uint8Array(PROG_LEN * 4);
+  const portMod = options.portCount ?? 8;
   for (let i = 0; i < PROG_LEN; i++) {
     let op: Opcode;
-    // Force SENSE op eerste instructies als forceSense is gezet (voor arena)
-    if (_options.forceSense && (i === 0 || i === 1)) {
+    if (options.forceSense && i < 2) {
       op = Opcode.SENSE;
     } else {
-      op = sampleNeutralCpuOpcode(rng);
+      op = sampleNeutralCpuOpcode(rng, bitWidth);
     }
     const dst = Math.floor(rng() * 8);
-    const src = _options.forceSense && (i === 0 || i === 1) ? Math.floor(rng() * 4) : Math.floor(rng() * 8);
+    const src =
+      op === Opcode.SENSE
+        ? Math.floor(rng() * portMod)
+        : Math.floor(rng() * 8);
     const imm = Math.floor(rng() * 48) - 16;
     encodeInstruction(g, i, op, dst, src, imm);
   }
@@ -2511,147 +2525,109 @@ export function createRandomGenome(
 export function createStarterGenome(taskId: TaskId): Uint8Array {
   const g = new Uint8Array(PROG_LEN * 4);
   if (taskId === 'homeostasis') {
-    // Thermisch evenwicht-strategie: temp dicht bij 52°C, queue laag, energy > 25
+    // Thermisch & bus-evenwicht:
     // P0=temp, P1=queue, P2=energy, P3=temp-55, P4=queue-40
-    // Actie: 0=Rust (temp↓, energy↑, queue↑), 1=Normaal (temp↑, queue↓),
-    //        2=Turbo (temp↑↑, queue↓↓), 3=Koelen (temp↓↓, energy↓)
-    // Strategie: P3 (temp-55) gebruiken als hoofdsensor.
-    // Als P3 > 0 (temp > 55) -> koelen (actie 3).
-    // Als P3 < -10 (temp < 45) -> normaal (actie 1) om op te warmen.
-    // Als energy < 30 -> rust (actie 0) om energie op te laden.
-    // Als queue > 50 -> turbo (actie 2) om queue te verwerken.
-    // Anders -> rust (actie 0) als veilige default.
+    // Acties: 0=Rust/Laad, 1=Normaal werk, 2=Turbo-burst, 3=Koelen
     encodeInstruction(g, 0, Opcode.SENSE, 0, 0, 0);   // R0 = temp
     encodeInstruction(g, 1, Opcode.SENSE, 1, 1, 0);   // R1 = queue
     encodeInstruction(g, 2, Opcode.SENSE, 2, 2, 0);   // R2 = energy
-    encodeInstruction(g, 3, Opcode.SENSE, 3, 3, 0);   // R3 = temp-55 (relatief)
-    encodeInstruction(g, 4, Opcode.MOVI, 4, 0, 0);    // R4 = 0 (nulpunt)
-    encodeInstruction(g, 5, Opcode.CMP, 3, 4, 0);     // CMP temp-55 0
-    encodeInstruction(g, 6, Opcode.JLT, 0, 0, 16);    // als temp <= 55 -> check koud (@16)
-    // Temp > 55: koelen!
-    encodeInstruction(g, 7, Opcode.MOVI, 5, 0, 3);    // R5 = 3 (koelen)
-    encodeInstruction(g, 8, Opcode.ACT, 0, 5, 0);     // ACT 3
-    encodeInstruction(g, 9, Opcode.JMP, 0, 0, 24);    // einde (@24)
-    encodeInstruction(g, 10, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 11, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 12, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 13, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 14, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 15, Opcode.NOP, 0, 0, 0);    // padding
-    // Temp <= 55: check of te koud
-    encodeInstruction(g, 16, Opcode.MOVI, 6, 0, 10);  // R6 = 10 (drempel)
-    encodeInstruction(g, 17, Opcode.NEG, 7, 3, 0);    // R7 = -(temp-55) = 55-temp
-    encodeInstruction(g, 18, Opcode.CMP, 7, 6, 0);    // CMP 55-temp 10
-    encodeInstruction(g, 19, Opcode.JLT, 0, 0, 20);   // als 55-temp > 10 (temp < 45) -> opwarmen
-    // Normale temp: check energy
-    encodeInstruction(g, 20, Opcode.MOVI, 6, 0, 30);  // R6 = 30 (energy drempel)
-    encodeInstruction(g, 21, Opcode.CMP, 2, 6, 0);    // CMP energy 30
-    encodeInstruction(g, 22, Opcode.JLT, 0, 0, 23);   // als energy < 30 -> rust
-    encodeInstruction(g, 23, Opcode.MOVI, 5, 0, 0);   // R5 = 0 (rust - default)
-    encodeInstruction(g, 24, Opcode.ACT, 0, 5, 0);    // ACT R5
-    encodeInstruction(g, 25, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 26, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 27, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 28, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 29, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 30, Opcode.NOP, 0, 0, 0);    // padding
-    encodeInstruction(g, 31, Opcode.NOP, 0, 0, 0);    // padding
+    encodeInstruction(g, 3, Opcode.SENSE, 3, 3, 0);   // R3 = temp - 55
+    encodeInstruction(g, 4, Opcode.MOVI, 4, 0, 0);    // R4 = 0
+    encodeInstruction(g, 5, Opcode.CMP, 4, 3, 0);     // CMP 0, temp-55 (CF=1 als temp > 55)
+    encodeInstruction(g, 6, Opcode.JLT, 0, 0, 16);    // temp > 55 -> koelen (@16)
+    encodeInstruction(g, 7, Opcode.MOVI, 6, 0, 28);   // R6 = 28
+    encodeInstruction(g, 8, Opcode.CMP, 2, 6, 0);     // CMP energy, 28
+    encodeInstruction(g, 9, Opcode.JLT, 0, 0, 18);    // energy < 28 -> rust (@18)
+    encodeInstruction(g, 10, Opcode.MOVI, 6, 0, 50);  // R6 = 50
+    encodeInstruction(g, 11, Opcode.CMP, 6, 1, 0);    // CMP 50, queue (CF=1 als queue > 50)
+    encodeInstruction(g, 12, Opcode.JLT, 0, 0, 20);   // queue > 50 -> turbo (@20)
+    encodeInstruction(g, 13, Opcode.MOVI, 5, 0, 1);   // R5 = 1 (normaal werk)
+    encodeInstruction(g, 14, Opcode.ACT, 0, 5, 0);
+    encodeInstruction(g, 15, Opcode.NOP, 0, 0, 0);
+    encodeInstruction(g, 16, Opcode.MOVI, 5, 0, 3);   // R5 = 3 (koelen)
+    encodeInstruction(g, 17, Opcode.ACT, 0, 5, 0);
+    encodeInstruction(g, 18, Opcode.MOVI, 5, 0, 0);   // R5 = 0 (rust/laad)
+    encodeInstruction(g, 19, Opcode.ACT, 0, 5, 0);
+    encodeInstruction(g, 20, Opcode.MOVI, 5, 0, 2);   // R5 = 2 (turbo)
+    encodeInstruction(g, 21, Opcode.ACT, 0, 5, 0);
   } else if (taskId === 'arena') {
-    // Arena-navigator: navigeert naar energiebronnen via DeltaX/DeltaY sensoren.
-    // P0 = DX energiebron (bx-ax), P1 = DY energiebron (by-ay)
+    // Arena-navigator: kies as met grootste |Delta|, vermijd directe stap op storing indien mogelijk
+    // P0 = DX energiebron, P1 = DY energiebron
     // Actie: 0=Noord(Y-1), 1=Oost(X+1), 2=Zuid(Y+1), 3=West(X-1)
-    // Strategie: |DX| vs |DY| vergelijken; grootste delta eerst aanpakken, teken bepaalt richting.
-    // R0=DX_energie, R1=DY_energie, R4=|DX|, R5=actie, R6=|DY|, R7=0 (nul constant)
-    encodeInstruction(g, 0, Opcode.SENSE, 0, 0, 0);   // R0 = DX (bx - ax)
-    encodeInstruction(g, 1, Opcode.SENSE, 1, 1, 0);   // R1 = DY (by - ay)
+    encodeInstruction(g, 0, Opcode.SENSE, 0, 0, 0);   // R0 = DX
+    encodeInstruction(g, 1, Opcode.SENSE, 1, 1, 0);   // R1 = DY
     encodeInstruction(g, 2, Opcode.ABS, 4, 0, 0);     // R4 = |DX|
     encodeInstruction(g, 3, Opcode.ABS, 6, 1, 0);     // R6 = |DY|
-    encodeInstruction(g, 4, Opcode.CMP, 4, 6, 0);     // CMP |DX| |DY| -> CF als |DX| < |DY|
-    encodeInstruction(g, 5, Opcode.JLT, 0, 0, 10);    // als |DX| < |DY| -> Y eerst (@10)
-    // X eerst (|DX| >= |DY|)
-    encodeInstruction(g, 6, Opcode.MOVI, 7, 0, 0);    // R7 = 0 (constant voor vergelijking)
-    encodeInstruction(g, 7, Opcode.CMP, 0, 7, 0);     // CMP DX 0 -> CF als DX < 0
-    encodeInstruction(g, 8, Opcode.JLT, 0, 0, 12);    // als DX < 0 -> West (@12)
+    encodeInstruction(g, 4, Opcode.CMP, 4, 6, 0);     // CMP |DX|, |DY| -> CF als |DX| < |DY|
+    encodeInstruction(g, 5, Opcode.JLT, 0, 0, 14);    // |DX| < |DY| -> Y eerst (@14)
+    // X eerst
+    encodeInstruction(g, 6, Opcode.MOVI, 7, 0, 0);    // R7 = 0
+    encodeInstruction(g, 7, Opcode.CMP, 0, 7, 0);     // CMP DX, 0 -> CF als DX < 0
+    encodeInstruction(g, 8, Opcode.JLT, 0, 0, 12);    // DX < 0 -> West (@12)
     encodeInstruction(g, 9, Opcode.MOVI, 5, 0, 1);    // R5 = 1 (Oost)
-    encodeInstruction(g, 10, Opcode.JMP, 0, 0, 18);   // naar ACT (@18)
-    encodeInstruction(g, 11, Opcode.NOP, 0, 0, 0);     // padding
+    encodeInstruction(g, 10, Opcode.JMP, 0, 0, 19);   // -> ACT (@19)
+    encodeInstruction(g, 11, Opcode.NOP, 0, 0, 0);
     encodeInstruction(g, 12, Opcode.MOVI, 5, 0, 3);   // R5 = 3 (West)
-    encodeInstruction(g, 13, Opcode.JMP, 0, 0, 18);   // naar ACT (@18)
-    // Y eerst (|DX| < |DY|)
-    encodeInstruction(g, 14, Opcode.CMP, 1, 7, 0);    // CMP DY 0 -> CF als DY < 0
-    encodeInstruction(g, 15, Opcode.JLT, 0, 0, 17);   // als DY < 0 -> Noord (@17)
-    encodeInstruction(g, 16, Opcode.MOVI, 5, 0, 2);   // R5 = 2 (Zuid)
-    encodeInstruction(g, 17, Opcode.JMP, 0, 0, 18);   // naar ACT (@18)
-    encodeInstruction(g, 18, Opcode.MOVI, 5, 0, 0);   // R5 = 0 (Noord - fallback)
-    encodeInstruction(g, 19, Opcode.ACT, 0, 5, 0);    // ACT R5
-    // Rest NOP
-    for (let i = 20; i < PROG_LEN; i++) {
+    encodeInstruction(g, 13, Opcode.JMP, 0, 0, 19);   // -> ACT (@19)
+    // Y eerst
+    encodeInstruction(g, 14, Opcode.MOVI, 7, 0, 0);   // R7 = 0
+    encodeInstruction(g, 15, Opcode.CMP, 1, 7, 0);    // CMP DY, 0 -> CF als DY < 0
+    encodeInstruction(g, 16, Opcode.JLT, 0, 0, 20);   // DY < 0 -> Noord (@20)
+    encodeInstruction(g, 17, Opcode.MOVI, 5, 0, 2);   // R5 = 2 (Zuid)
+    encodeInstruction(g, 18, Opcode.JMP, 0, 0, 21);   // -> ACT (@21)
+    encodeInstruction(g, 19, Opcode.ACT, 0, 5, 0);    // ACT R5 (X branch)
+    encodeInstruction(g, 20, Opcode.MOVI, 5, 0, 0);   // R5 = 0 (Noord)
+    encodeInstruction(g, 21, Opcode.ACT, 0, 5, 0);    // ACT R5 (Y branch)
+    for (let i = 22; i < PROG_LEN; i++) {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else if (taskId === 'ecosystem') {
-    // Ecosystem "Brein": 4-in-1 multi-task — all 4 tasks simultaneously
-    // P0-P3: Homeostasis, P4-P7: Arena, P8-P11: Bitstream, P12-P15: Hardware
-    // R0: Homeostasis action, R1: Arena direction, R2: Bitstream prediction, R3: Hardware prediction
-    // Homeostasis: P0=temp, P1=queue, P2=energy, P3=temp-55
-    // Arena: P4=DX, P5=DY, P6=HX, P7=HY
-    // Bitstream: P8=bitCurr, P9=bitPrev, P10=tick&1, P11=popcount
-    // Hardware: P12=hwA, P13=hwB, P14=XOR, P15=mask
-    // Homeostasis strategy: temp > 55 → koelen(3), energy < 30 → rust(0), else → werk(1)
-    encodeInstruction(g, 0, Opcode.SENSE, 0, 0, 0);   // R0 = P0 (temp)
-    encodeInstruction(g, 1, Opcode.SENSE, 1, 2, 0);   // R1 = P2 (energy)
-    encodeInstruction(g, 2, Opcode.SENSE, 2, 3, 0);   // R2 = P3 (temp-55)
-    encodeInstruction(g, 3, Opcode.MOVI, 3, 0, 0);    // R3 = 0
-    encodeInstruction(g, 4, Opcode.CMP, 2, 3, 0);     // CMP temp-55 0
-    encodeInstruction(g, 5, Opcode.JLT, 0, 0, 9);     // temp <= 55 → check energy (@9)
-    encodeInstruction(g, 6, Opcode.MOVI, 4, 0, 3);    // R4 = 3 (koelen)
-    encodeInstruction(g, 7, Opcode.JMP, 0, 0, 12);    // → ACT homeo (@12)
-    encodeInstruction(g, 8, Opcode.MOVI, 4, 0, 1);    // R4 = 1 (werk)
-    encodeInstruction(g, 9, Opcode.MOVI, 3, 0, 30);   // R3 = 30
-    encodeInstruction(g, 10, Opcode.CMP, 1, 3, 0);    // CMP energy 30
-    encodeInstruction(g, 11, Opcode.JLT, 0, 0, 12);   // energy < 30 → rust(0)
-    encodeInstruction(g, 12, Opcode.MOVI, 4, 0, 0);   // R4 = 0 (rust)
-    // Arena: navigate toward nearest energy node
-    encodeInstruction(g, 13, Opcode.SENSE, 5, 4, 0);  // R5 = P4 (DX)
-    encodeInstruction(g, 14, Opcode.SENSE, 6, 5, 0);  // R6 = P5 (DY)
-    encodeInstruction(g, 15, Opcode.ABS, 7, 5, 0);    // R7 = |DX|
-    encodeInstruction(g, 16, Opcode.ABS, 0, 6, 0);    // R0 = |DY|
-    encodeInstruction(g, 17, Opcode.CMP, 7, 0, 0);    // CMP |DX| |DY|
-    encodeInstruction(g, 18, Opcode.JLT, 0, 0, 22);   // |DX| < |DY| → Y eerst (@22)
-    encodeInstruction(g, 19, Opcode.CMP, 5, 3, 0);    // CMP DX 0
-    encodeInstruction(g, 20, Opcode.JLT, 0, 0, 24);   // DX < 0 → West (@24)
-    encodeInstruction(g, 21, Opcode.MOVI, 5, 0, 1);   // R5 = 1 (Oost)
-    encodeInstruction(g, 22, Opcode.JMP, 0, 0, 26);   // → ACT arena (@26)
-    encodeInstruction(g, 23, Opcode.MOVI, 5, 0, 3);   // R5 = 3 (West)
-    encodeInstruction(g, 24, Opcode.JMP, 0, 0, 26);   // → ACT arena (@26)
-    encodeInstruction(g, 25, Opcode.MOVI, 5, 0, 0);   // R5 = 0 (Noord - fallback)
-    // Bitstream: predict (bitCurr ^ (bitPrev >> 1)) & 0x0F
-    encodeInstruction(g, 26, Opcode.SENSE, 6, 8, 0);  // R6 = P8 (bitCurr)
-    encodeInstruction(g, 27, Opcode.SENSE, 7, 9, 0);  // R7 = P9 (bitPrev)
-    encodeInstruction(g, 28, Opcode.SHR, 7, 7, 1);    // R7 = bitPrev >> 1
-    encodeInstruction(g, 29, Opcode.XOR, 6, 7, 0);    // R6 = bitCurr ^ (bitPrev >> 1)
-    encodeInstruction(g, 30, Opcode.MOVI, 0, 0, 15);  // R0 = 0x0F
-    encodeInstruction(g, 31, Opcode.AND, 6, 0, 0);    // R6 = R6 & 0x0F
-    // Hardware: predict ((hwA ^ hwB) + (dP0 >> 1)) & 0x0F
-    encodeInstruction(g, 32, Opcode.SENSE, 0, 12, 0); // R0 = P12 (hwA)
-    encodeInstruction(g, 33, Opcode.SENSE, 7, 13, 0); // R7 = P13 (hwB)
-    encodeInstruction(g, 34, Opcode.XOR, 0, 7, 0);    // R0 = hwA ^ hwB
-    encodeInstruction(g, 35, Opcode.MOVI, 7, 0, 15);  // R7 = 0x0F
-    encodeInstruction(g, 36, Opcode.AND, 0, 7, 0);    // R0 = R0 & 0x0F
-    // ACT: output all 4 actions via R0-R3
-    encodeInstruction(g, 37, Opcode.MOV, 0, 4, 0);    // R0 = homeo action
-    encodeInstruction(g, 38, Opcode.MOV, 1, 5, 0);    // R1 = arena direction
-    encodeInstruction(g, 39, Opcode.MOV, 2, 6, 0);    // R2 = bitstream prediction
-    encodeInstruction(g, 40, Opcode.MOV, 3, 0, 0);    // R3 = hardware prediction
-    encodeInstruction(g, 41, Opcode.ACT, 0, 0, 0);    // ACT R0 (homeo)
-    // Rest NOP
-    for (let i = 42; i < PROG_LEN; i++) {
+    // Ecosystem "Brein": compact <= 24-cycle programma dat alle 4 registers (R0..R3) vult
+    // R0=Homeo (0-3), R1=Arena (0-3), R2=Bitstream (0-15), R3=Hardware (0-15)
+    // Homeostasis -> R0: energy < 30 -> 0 (rust), temp > 55 -> 3 (koelen), else 1 (werk)
+    encodeInstruction(g, 0, Opcode.SENSE, 4, 3, 0);   // R4 = P3 (temp - 55)
+    encodeInstruction(g, 1, Opcode.SENSE, 5, 2, 0);   // R5 = P2 (energy)
+    encodeInstruction(g, 2, Opcode.MOVI, 0, 0, 1);    // R0 = 1 (default werk)
+    encodeInstruction(g, 3, Opcode.MOVI, 6, 0, 0);    // R6 = 0
+    encodeInstruction(g, 4, Opcode.CMP, 6, 4, 0);     // CMP 0, temp-55 -> CF als temp > 55
+    encodeInstruction(g, 5, Opcode.MOVI, 7, 0, 3);    // R7 = 3 (koelen)
+    encodeInstruction(g, 6, Opcode.CMOVLT, 0, 7, 0);  // als temp > 55 -> R0 = 3
+    encodeInstruction(g, 7, Opcode.MOVI, 6, 0, 30);   // R6 = 30
+    encodeInstruction(g, 8, Opcode.CMP, 5, 6, 0);     // CMP energy, 30 -> CF als energy < 30
+    encodeInstruction(g, 9, Opcode.MOVI, 7, 0, 0);    // R7 = 0 (rust)
+    encodeInstruction(g, 10, Opcode.CMOVLT, 0, 7, 0); // als energy < 30 -> R0 = 0
+    // Arena -> R1: 0=N, 1=O, 2=Z, 3=W via branchless CMOVLT!
+    encodeInstruction(g, 11, Opcode.SENSE, 4, 4, 0);  // R4 = P4 (DX)
+    encodeInstruction(g, 12, Opcode.SENSE, 5, 5, 0);  // R5 = P5 (DY)
+    encodeInstruction(g, 13, Opcode.MOVI, 6, 0, 0);   // R6 = 0
+    encodeInstruction(g, 14, Opcode.MOVI, 1, 0, 1);   // R1 = 1 (Oost)
+    encodeInstruction(g, 15, Opcode.CMP, 4, 6, 0);    // CMP DX, 0 -> CF als DX < 0
+    encodeInstruction(g, 16, Opcode.MOVI, 7, 0, 3);   // R7 = 3 (West)
+    encodeInstruction(g, 17, Opcode.CMOVLT, 1, 7, 0); // als DX < 0 -> R1 = 3
+    encodeInstruction(g, 18, Opcode.ABS, 4, 4, 0);    // R4 = |DX|
+    encodeInstruction(g, 19, Opcode.ABS, 6, 5, 0);    // R6 = |DY|
+    // Compact branchless Y override: als |DX| < |DY|, kies Zuid(2) of Noord(0)
+    encodeInstruction(g, 20, Opcode.MOVI, 7, 0, 0);   // R7 = 0
+    encodeInstruction(g, 21, Opcode.CMP, 5, 7, 0);    // CMP DY, 0
+    encodeInstruction(g, 22, Opcode.MOVI, 6, 0, 2);   // R6 = 2 (Zuid)
+    encodeInstruction(g, 23, Opcode.CMOVLT, 6, 7, 0); // als DY < 0 -> R6 = 0 (Noord)
+    encodeInstruction(g, 24, Opcode.ABS, 7, 5, 0);    // R7 = |DY|
+    encodeInstruction(g, 25, Opcode.CMP, 4, 7, 0);    // CMP |DX|, |DY| -> CF als |DX| < |DY|
+    encodeInstruction(g, 26, Opcode.CMOVLT, 1, 6, 0); // als |DX| < |DY| -> R1 = R6
+    // Bitstream -> R2
+    encodeInstruction(g, 27, Opcode.SENSE, 2, 8, 0);  // R2 = P8 (bitCurr)
+    encodeInstruction(g, 28, Opcode.SENSE, 6, 9, 0);  // R6 = P9 (bitPrev)
+    encodeInstruction(g, 29, Opcode.SHR, 6, 6, 1);    // R6 = bitPrev >> 1
+    encodeInstruction(g, 30, Opcode.XOR, 2, 6, 0);    // R2 = R2 ^ (bitPrev >> 1)
+    // Hardware -> R3
+    encodeInstruction(g, 31, Opcode.SENSE, 3, 12, 0); // R3 = P12 (hwA)
+    encodeInstruction(g, 32, Opcode.SENSE, 6, 13, 0); // R6 = P13 (hwB)
+    encodeInstruction(g, 33, Opcode.XOR, 3, 6, 0);    // R3 = hwA ^ hwB
+    for (let i = 34; i < PROG_LEN; i++) {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else if (taskId === 'bitstream') {
     // Bitpatroon-cortex: voorspel (bitCurr ^ (bitPrev >> 1)) & 0x0F
-    // P0=bitCurr, P1=bitPrev, P2=tick&1, P3=popcount(bitCurr),
-    // P4=bitLastErr, P5=bitPred, P6=bitCurr^bitPrev
-    // Directe implementatie van de target-formule.
     encodeInstruction(g, 0, Opcode.SENSE, 0, 0, 0);   // R0 = bitCurr
     encodeInstruction(g, 1, Opcode.SENSE, 1, 1, 0);   // R1 = bitPrev
     encodeInstruction(g, 2, Opcode.SHR, 1, 1, 1);     // R1 = bitPrev >> 1
@@ -2659,15 +2635,11 @@ export function createStarterGenome(taskId: TaskId): Uint8Array {
     encodeInstruction(g, 4, Opcode.MOVI, 2, 0, 15);   // R2 = 0x0F (mask)
     encodeInstruction(g, 5, Opcode.AND, 0, 2, 0);     // R0 = R0 & 0x0F (4-bit resultaat)
     encodeInstruction(g, 6, Opcode.ACT, 0, 0, 0);     // ACT R0 (voorspelling)
-    // Rest NOP
     for (let i = 7; i < PROG_LEN; i++) {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else {
     // Open Hardware-Bus: voorspel ((hwStreamA ^ hwStreamB) + (dP0 >> 1)) & 0x0F
-    // P0=hwStreamA, P1=hwStreamB, P2=hwInputWord, P3=hwMask,
-    // P4=dP0 (streamA - prevA), P5=lastAction
-    // Directe implementatie van de target-formule.
     encodeInstruction(g, 0, Opcode.SENSE, 0, 0, 0);   // R0 = hwStreamA
     encodeInstruction(g, 1, Opcode.SENSE, 1, 1, 0);   // R1 = hwStreamB
     encodeInstruction(g, 2, Opcode.SENSE, 2, 4, 0);   // R2 = dP0 (streamA - prevA)
@@ -2677,7 +2649,6 @@ export function createStarterGenome(taskId: TaskId): Uint8Array {
     encodeInstruction(g, 6, Opcode.MOVI, 3, 0, 15);   // R3 = 0x0F (4-bit mask)
     encodeInstruction(g, 7, Opcode.AND, 0, 3, 0);     // R0 = R0 & 0x0F
     encodeInstruction(g, 8, Opcode.ACT, 0, 0, 0);     // ACT R0 (voorspelling)
-    // Rest NOP
     for (let i = 9; i < PROG_LEN; i++) {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
@@ -3370,13 +3341,14 @@ export function stepEnvironment(
     // === HARDWARE (weight ×1.5) ===
     const hwPred = ((rawAction >> 8) & 0x0f);
     env.ecoHwPrediction = hwPred;
-    const hwDp0 = env.ecoHwStreamA - (env.ecoHwStreamA - Math.floor(rng() * 10));
+    const hwDp0 = env.ecoHwStreamA - env.hwPrevA;
     const hwTarget = ((env.ecoHwStreamA ^ env.ecoHwStreamB) + (hwDp0 >> 1)) & 0x0f;
     const hwErr = popcount4(hwPred ^ hwTarget);
     const hwExact = hwPred === hwTarget;
     let hwReward = (4 - hwErr) * 4 + (hwExact ? 10 : 0);
     env.ecoHwScore += hwReward * 1.5;
     reward += hwReward * 1.5;
+    env.hwPrevA = env.ecoHwStreamA;
     const stepOsc = Math.round(32 + 24 * Math.sin(env.tick * 0.45 + (rng() - 0.5) * 0.6));
     env.ecoHwStreamA = (stepOsc + (disturbance.loadSpike ?? 0)) & 0xff;
     env.ecoHwStreamB = Math.floor(rng() * 32) ^ (env.ecoHwStreamA & 0x0f);
@@ -3471,11 +3443,15 @@ export function evaluateAgentDetailed(
       runVMTick(options.coGenome, vmB, env.ports, bitWidth, cycleCap, {
         allowSmc: options.allowSmc,
         sharedBus,
+        taskId,
+        recordSmcLog: false,
       });
     }
     const { action, didAct } = runVMTick(genome, vmA, env.ports, bitWidth, cycleCap, {
       allowSmc: options.allowSmc,
       sharedBus,
+      taskId,
+      recordSmcLog: false,
     });
     stepEnvironment(env, action, didAct, rng);
   }
@@ -3511,7 +3487,8 @@ export interface GenomeHwBias {
   isCoCore?: boolean;
   activeSlots?: number[] | null;
   surgical?: boolean;
-  allowSmc?: boolean; // Als true: PWRITE-injectie wordt ingeschakeld
+  allowSmc?: boolean;
+  portCount?: number;
 }
 
 function genomeDiversityKey(genome: Uint8Array): string {
@@ -3530,6 +3507,8 @@ export function mutateGenome(
   opts: GenomeHwBias = {}
 ): Uint8Array {
   const child = new Uint8Array(parent);
+  const bw = opts.bitWidth ?? 64;
+  const portMod = opts.portCount ?? 8;
   const activePool =
     opts.activeSlots && opts.activeSlots.length > 0 && rng() < 0.8 ? opts.activeSlots : null;
 
@@ -3542,11 +3521,12 @@ export function mutateGenome(
       const base = i * 4;
       const r = rng();
       if (r < 0.36) {
-        child[base] = sampleNeutralCpuOpcode(rng);
+        child[base] = sampleNeutralCpuOpcode(rng, bw);
+        if (child[base] === Opcode.SENSE) child[base + 2] = Math.floor(rng() * portMod);
       } else if (r < 0.58) {
         child[base + 1] = Math.floor(rng() * 8);
       } else if (r < 0.8) {
-        child[base + 2] = Math.floor(rng() * 8);
+        child[base + 2] = child[base] === Opcode.SENSE ? Math.floor(rng() * portMod) : Math.floor(rng() * 8);
       } else if (rng() < 0.5) {
         const cur = child[base + 3] > 127 ? child[base + 3] - 256 : child[base + 3];
         const delta = Math.floor(rng() * 9) - 4;
@@ -3563,85 +3543,43 @@ export function mutateGenome(
       const r = rng();
       const base = i * 4;
       if (r < 0.36) {
-        child[base] = sampleNeutralCpuOpcode(rng);
+        child[base] = sampleNeutralCpuOpcode(rng, bw);
+        if (child[base] === Opcode.SENSE) child[base + 2] = Math.floor(rng() * portMod);
       } else if (r < 0.58) {
         child[base + 1] = Math.floor(rng() * 8);
       } else if (r < 0.8) {
-        child[base + 2] = Math.floor(rng() * 8);
+        child[base + 2] = child[base] === Opcode.SENSE ? Math.floor(rng() * portMod) : Math.floor(rng() * 8);
       } else {
         child[base + 3] = Math.floor(rng() * 256);
       }
     }
   }
 
+  // Gentle structural exploration (10% total instead of 44% so working jump offsets survive)
   const structRoll = rng();
-  if (structRoll < 0.22) {
-    // Indel insert-shift around an active slot
+  if (structRoll < 0.05) {
     const pos = activePool
       ? Math.min(PROG_LEN - 2, activePool[Math.floor(rng() * activePool.length)])
       : Math.floor(rng() * (PROG_LEN - 1));
     for (let i = PROG_LEN - 1; i > pos; i--) {
       for (let k = 0; k < 4; k++) child[i * 4 + k] = child[(i - 1) * 4 + k];
     }
+    const newOp = sampleNeutralCpuOpcode(rng, bw);
     encodeInstruction(
       child,
       pos,
-      sampleNeutralCpuOpcode(rng),
+      newOp,
       Math.floor(rng() * 8),
-      Math.floor(rng() * 8),
+      newOp === Opcode.SENSE ? Math.floor(rng() * portMod) : Math.floor(rng() * 8),
       Math.floor(rng() * 48) - 16
     );
-  } else if (structRoll < 0.44) {
+  } else if (structRoll < 0.10) {
     const a = Math.floor(rng() * PROG_LEN) * 4;
     const b = Math.floor(rng() * PROG_LEN) * 4;
     for (let k = 0; k < 4; k++) {
       const tmp = child[a + k];
       child[a + k] = child[b + k];
       child[b + k] = tmp;
-    }
-  }
-
-  // Gerichte SENSE-injectie: 40% kans om een SENSE-instructie toe te voegen
-  // Alleen op NOP-slots om de werkende code van starter genomes niet te vernietigen
-  if (rng() < 0.40) {
-    // Zoek een NOP-slot om te overschrijven
-    const nopSlots: number[] = [];
-    for (let i = 0; i < PROG_LEN; i++) {
-      if (child[i * 4] === Opcode.NOP) nopSlots.push(i);
-    }
-    if (nopSlots.length > 0) {
-      const senseSlot = nopSlots[Math.floor(rng() * nopSlots.length)];
-      encodeInstruction(
-        child,
-        senseSlot,
-        Opcode.SENSE,
-        Math.floor(rng() * 8),
-        Math.floor(rng() * 4),  // P0..P3 (sensor ports)
-        0
-      );
-    }
-  }
-
-  // Gerichte PWRITE-injectie: 20% kans als SMC is ingeschakeld
-  // Alleen op NOP-slots om de werkende code niet te vernietigen
-  if (opts.allowSmc && rng() < 0.20) {
-    const nopSlots: number[] = [];
-    for (let i = 0; i < PROG_LEN; i++) {
-      if (child[i * 4] === Opcode.NOP) nopSlots.push(i);
-    }
-    if (nopSlots.length > 0) {
-      const pwriteSlot = nopSlots[Math.floor(rng() * nopSlots.length)];
-      // PWRITE [Rd], Rs — schrijf Rs naar eigen code op adres Rd
-      let targetSlot = Math.floor(rng() * PROG_LEN);
-      if (targetSlot === pwriteSlot) targetSlot = (targetSlot + 1) % PROG_LEN;
-      encodeInstruction(
-        child,
-        pwriteSlot,
-        Opcode.PWRITE,
-        targetSlot,  // Rd = doeladres in eigen code
-        Math.floor(rng() * 8),  // Rs = waarde om te schrijven
-        0
-      );
     }
   }
 
@@ -3666,6 +3604,336 @@ export function crossoverGenomes(a: Uint8Array, b: Uint8Array, rng: () => number
   return child;
 }
 
+export function getEvolutionEvalParams(taskId: TaskId, generation: number): {
+  evalSeeds: number[];
+  evalTicks: number;
+} {
+  const taskOffset =
+    taskId === 'homeostasis' ? 0 : taskId === 'arena' ? 29 : taskId === 'bitstream' ? 53 : taskId === 'hardware' ? 71 : 95;
+  const epochSeedA = 5100 + Math.floor(generation / 8) * 197 + taskOffset;
+  const epochSeedB = 6101 + Math.floor(generation / 8) * 313 + taskOffset;
+  // Arena & ecosystem start at 82 energy (-1.2/tick -> dies at tick 69 without food),
+  // so 76 ticks guarantees survival is directly selected!
+  const evalTicks = taskId === 'arena' || taskId === 'ecosystem' ? 76 : 48;
+  return {
+    evalSeeds: [...BENCHMARK_ANCHOR_SEEDS, epochSeedA, epochSeedB],
+    evalTicks,
+  };
+}
+
+export function evaluatePopulationSlice(
+  slice: Agent[],
+  taskId: TaskId,
+  generation: number,
+  bitWidth: BitWidth = 32,
+  options: {
+    allowSmc?: boolean;
+    inheritSmc?: boolean;
+    coGenome?: Uint8Array | null;
+    maxCycles?: number;
+    initialEnv?: EnvSnapshot | null;
+  } = {}
+): {
+  evaluated: Agent[];
+  activeSlotsByAgent: number[][];
+} {
+  const { evalSeeds, evalTicks } = getEvolutionEvalParams(taskId, generation);
+  const cycleCap = options.maxCycles ?? MAX_CYCLES_PER_TICK;
+  const evaluated: Agent[] = new Array(slice.length);
+  const activeSlotsByAgent: number[][] = new Array(slice.length);
+
+  for (let i = 0; i < slice.length; i++) {
+    const agent = slice[i];
+    let totalScore = 0;
+    let aliveCount = 0;
+    let lastModifiedCode: Uint8Array | null = null;
+    let lastSmcCount = 0;
+    const hitAccum = new Uint32Array(PROG_LEN);
+
+    for (let s = 0; s < evalSeeds.length; s++) {
+      const res = evaluateAgentDetailed(
+        agent.genome,
+        taskId,
+        evalSeeds[s],
+        bitWidth,
+        evalTicks,
+        {
+          allowSmc: options.allowSmc,
+          coGenome: options.coGenome ?? null,
+          maxCycles: cycleCap,
+          initialEnv: options.initialEnv,
+        }
+      );
+      totalScore += res.score;
+      if (res.alive) aliveCount += 1;
+      for (let k = 0; k < PROG_LEN; k++) {
+        if (res.hitCounts[k] > 0) hitAccum[k] = 1;
+      }
+      if (s === evalSeeds.length - 1) {
+        lastModifiedCode = res.modifiedCode;
+        lastSmcCount = res.smcModifiedCount;
+      }
+    }
+
+    const activeSlots: number[] = [];
+    for (let k = 0; k < PROG_LEN; k++) {
+      if (hitAccum[k] > 0) activeSlots.push(k);
+    }
+    activeSlotsByAgent[i] = activeSlots;
+
+    // Survival bonus ensures surviving agents strictly outrank starved/overheated agents
+    const survivalBonus = (aliveCount / evalSeeds.length) * 40;
+    const nextGenome =
+      options.allowSmc && options.inheritSmc && lastModifiedCode && lastSmcCount > 0
+        ? new Uint8Array(lastModifiedCode)
+        : new Uint8Array(agent.genome);
+
+    evaluated[i] = {
+      id: agent.id,
+      genome: nextGenome,
+      fitness: totalScore / evalSeeds.length + survivalBonus,
+      generationBorn: agent.generationBorn,
+    };
+  }
+
+  return { evaluated, activeSlotsByAgent };
+}
+
+export function selectAndBreedPopulation(
+  evaluatedPop: Agent[],
+  activeSlotsByAgent: number[][],
+  taskId: TaskId,
+  generation: number,
+  mutationRate: number,
+  bitWidth: BitWidth = 32,
+  options: {
+    allowSmc?: boolean;
+    dualCore?: boolean;
+    fromScratch?: boolean;
+  } = {}
+): {
+  nextPopulation: Agent[];
+  bestFitness: number;
+  meanFitness: number;
+  bestAgent: Agent;
+} {
+  const taskOffset =
+    taskId === 'homeostasis' ? 0 : taskId === 'arena' ? 29 : taskId === 'bitstream' ? 53 : taskId === 'hardware' ? 71 : 95;
+  const rng = createRng((generation + 1) * 997 * 31 + taskOffset + 7);
+  const popSize = evaluatedPop.length;
+  const portCount = taskId === 'ecosystem' ? 16 : 8;
+
+  let sum = 0;
+  for (let i = 0; i < popSize; i++) {
+    sum += evaluatedPop[i].fitness;
+  }
+
+  // Compute selectionFitness with niching WITHOUT corrupting raw agent.fitness
+  // and WITHOUT turning negative dying clones into higher scores!
+  const SHARING_RADIUS = 0.35;
+  const SHARING_STRENGTH = 0.35;
+  const selectionFitness = new Float64Array(popSize);
+  for (let i = 0; i < popSize; i++) {
+    let nicheCount = 1;
+    const gi = evaluatedPop[i].genome;
+    const slotsI = activeSlotsByAgent[i] ?? [];
+    for (let j = 0; j < popSize; j++) {
+      if (i === j) continue;
+      const gj = evaluatedPop[j].genome;
+      let matchCount = 0;
+      for (let k = 0; k < PROG_LEN; k++) {
+        if (gi[k * 4] === gj[k * 4]) matchCount++;
+      }
+      const similarity = matchCount / PROG_LEN;
+      if (similarity > SHARING_RADIUS) {
+        nicheCount += (similarity - SHARING_RADIUS) / (1.0 - SHARING_RADIUS);
+      }
+      const slotsJ = activeSlotsByAgent[j] ?? [];
+      if (slotsI.length > 0 && slotsJ.length > 0) {
+        let overlap = 0;
+        for (const s of slotsI) {
+          if (slotsJ.includes(s)) overlap++;
+        }
+        const jaccard = overlap / (slotsI.length + slotsJ.length - overlap);
+        if (jaccard > 0.6) {
+          nicheCount += (jaccard - 0.6) * 1.5;
+        }
+      }
+    }
+    const penalty = Math.min(SHARING_STRENGTH, ((nicheCount - 1) / nicheCount) * SHARING_STRENGTH);
+    const raw = evaluatedPop[i].fitness;
+    selectionFitness[i] = raw >= 0 ? raw * (1.0 - penalty) : raw * (1.0 + penalty);
+  }
+
+  const rawSorted = evaluatedPop
+    .map((agent, origIdx) => ({
+      agent,
+      activeSlots: activeSlotsByAgent[origIdx] ?? [],
+      selFit: selectionFitness[origIdx],
+    }))
+    .sort((a, b) => b.agent.fitness - a.agent.fitness);
+
+  const bestAgent = rawSorted[0].agent;
+  const bestFitness = bestAgent.fitness;
+  const meanFitness = sum / Math.max(1, popSize);
+
+  const indexed = [...rawSorted].sort((a, b) => b.selFit - a.selFit);
+
+  const eliteCount = Math.max(2, Math.min(Math.floor(popSize / 4), Math.floor(popSize / 8) + 2));
+  const freshImmigrants = Math.max(2, Math.floor(popSize * 0.08));
+  const nextPopulation: Agent[] = [];
+  const seenElites = new Set<string>();
+  const TOURNAMENT_SIZE = Math.min(5, popSize);
+
+  const tournamentSelect = () => {
+    let best = Math.floor(rng() * popSize);
+    for (let t = 1; t < TOURNAMENT_SIZE; t++) {
+      const candidate = Math.floor(rng() * popSize);
+      if (indexed[candidate].selFit > indexed[best].selFit) best = candidate;
+    }
+    return indexed[best];
+  };
+
+  // Always preserve global raw #1 elite first so best progress NEVER goes extinct!
+  seenElites.add(genomeDiversityKey(bestAgent.genome));
+  nextPopulation.push({
+    id: 0,
+    genome: new Uint8Array(bestAgent.genome),
+    fitness: bestAgent.fitness,
+    generationBorn: bestAgent.generationBorn,
+  });
+
+  for (let i = 0; i < indexed.length && nextPopulation.length < eliteCount; i++) {
+    const key = genomeDiversityKey(indexed[i].agent.genome);
+    if (!seenElites.has(key)) {
+      seenElites.add(key);
+      nextPopulation.push({
+        id: nextPopulation.length,
+        genome: new Uint8Array(indexed[i].agent.genome),
+        fitness: indexed[i].agent.fitness,
+        generationBorn: indexed[i].agent.generationBorn,
+      });
+    }
+  }
+
+  const allowStarterFallback = options.fromScratch === false;
+  const forceSense = taskId === 'arena' || taskId === 'hardware' || taskId === 'ecosystem';
+
+  for (let i = 0; i < freshImmigrants && nextPopulation.length < popSize - 4; i++) {
+    if (allowStarterFallback && rng() < 0.35) {
+      const seedGenome = new Uint8Array(createStarterGenome(taskId));
+      for (let b = 0; b < PROG_LEN * 4; b++) {
+        if (rng() < 0.12) seedGenome[b] = Math.floor(rng() * 256);
+      }
+      nextPopulation.push({
+        id: nextPopulation.length,
+        genome: seedGenome,
+        fitness: 0,
+        generationBorn: generation + 1,
+      });
+    } else {
+      nextPopulation.push({
+        id: nextPopulation.length,
+        genome: createRandomGenome(rng, bitWidth, {
+          dualCore: options.dualCore,
+          isCoCore: false,
+          forceSense,
+          portCount,
+        }),
+        fitness: 0,
+        generationBorn: generation + 1,
+      });
+    }
+  }
+
+  const adaptiveMutationRate = mutationRate + (generation < 30 ? 0.03 : 0.0);
+
+  while (nextPopulation.length < popSize) {
+    const p1 = tournamentSelect();
+    const p2 = tournamentSelect();
+    const baseGenome =
+      rng() < 0.65 ? crossoverGenomes(p1.agent.genome, p2.agent.genome, rng) : p1.agent.genome;
+    const mutated = mutateGenome(baseGenome, adaptiveMutationRate, rng, {
+      bitWidth,
+      dualCore: options.dualCore,
+      isCoCore: false,
+      activeSlots: p1.activeSlots,
+      surgical: rng() < 0.68,
+      allowSmc: options.allowSmc,
+      portCount,
+    });
+    nextPopulation.push({
+      id: nextPopulation.length,
+      genome: mutated,
+      fitness: 0,
+      generationBorn: generation + 1,
+    });
+  }
+
+  return {
+    nextPopulation,
+    bestFitness,
+    meanFitness,
+    bestAgent,
+  };
+}
+
+export function selectAndBreedCoPopulation(
+  evaluatedCoPop: Agent[],
+  generation: number,
+  mutationRate: number,
+  bitWidth: BitWidth = 32,
+  allowSmc: boolean = true
+): {
+  nextCoPopulation: Agent[];
+  coBestFitness: number;
+  coAgent: Agent;
+} {
+  const rng = createRng((generation + 1) * 1999 + 37);
+  const popSize = evaluatedCoPop.length;
+  const eliteCount = Math.max(2, Math.floor(popSize / 8));
+  const parentSpan = Math.max(4, Math.floor(popSize * 0.33));
+  const sortedCo = [...evaluatedCoPop].sort((a, b) => b.fitness - a.fitness);
+  const coAgent = sortedCo[0];
+  const coBestFitness = coAgent.fitness;
+  const nextCoPopulation: Agent[] = [];
+  const seenCo = new Set<string>();
+
+  for (let i = 0; i < sortedCo.length && nextCoPopulation.length < eliteCount; i++) {
+    const key = genomeDiversityKey(sortedCo[i].genome);
+    if (!seenCo.has(key)) {
+      seenCo.add(key);
+      nextCoPopulation.push({
+        id: nextCoPopulation.length,
+        genome: new Uint8Array(sortedCo[i].genome),
+        fitness: sortedCo[i].fitness,
+        generationBorn: sortedCo[i].generationBorn,
+      });
+    }
+  }
+
+  while (nextCoPopulation.length < popSize) {
+    const p1 = sortedCo[Math.floor(Math.min(rng(), rng()) * Math.min(parentSpan, sortedCo.length))];
+    const p2 = sortedCo[Math.floor(Math.min(rng(), rng()) * Math.min(parentSpan, sortedCo.length))];
+    const baseGenome = rng() < 0.55 ? crossoverGenomes(p1.genome, p2.genome, rng) : p1.genome;
+    const mutated = mutateGenome(baseGenome, mutationRate, rng, {
+      bitWidth,
+      dualCore: true,
+      isCoCore: true,
+      surgical: rng() < 0.65,
+      allowSmc,
+    });
+    nextCoPopulation.push({
+      id: nextCoPopulation.length,
+      genome: mutated,
+      fitness: 0,
+      generationBorn: generation + 1,
+    });
+  }
+
+  return { nextCoPopulation, coBestFitness, coAgent };
+}
+
 export function evolveGeneration(
   population: Agent[],
   taskId: TaskId,
@@ -3678,7 +3946,8 @@ export function evolveGeneration(
     dualCore?: boolean;
     coPopulation?: Agent[] | null;
     maxCycles?: number;
-    initialEnv?: EnvSnapshot | null; // If provided, evaluations start from this state
+    initialEnv?: EnvSnapshot | null;
+    fromScratch?: boolean;
   } = {}
 ): {
   nextPopulation: Agent[];
@@ -3691,13 +3960,10 @@ export function evolveGeneration(
 } {
   const taskOffset =
     taskId === 'homeostasis' ? 0 : taskId === 'arena' ? 29 : taskId === 'bitstream' ? 53 : taskId === 'hardware' ? 71 : 95;
-  // Epoch rotates smoothly every 8 generations so improvements consolidate across multi-regime anchors + unseen seeds
-  const epochSeedA = 5100 + Math.floor(generation / 8) * 197 + taskOffset;
-  const epochSeedB = 6101 + Math.floor(generation / 8) * 313 + taskOffset;
-  const evalSeeds = [...BENCHMARK_ANCHOR_SEEDS, epochSeedA, epochSeedB];
   const rng = createRng((generation + 1) * 997 * 31 + taskOffset + 7);
   const popSize = population.length;
   const cycleCap = options.maxCycles ?? MAX_CYCLES_PER_TICK;
+  const { evalSeeds, evalTicks } = getEvolutionEvalParams(taskId, generation);
 
   let activeCoPop: Agent[] | null = null;
   if (options.dualCore) {
@@ -3717,221 +3983,41 @@ export function evolveGeneration(
   const prevBestCoGenome =
     activeCoPop && activeCoPop.length > 0 ? new Uint8Array(activeCoPop[0].genome) : null;
 
-  const activeSlotsByAgent: number[][] = new Array(popSize);
-  let sum = 0;
-
-  for (let i = 0; i < popSize; i++) {
-    const agent = population[i];
-    let totalScore = 0;
-    let lastModifiedCode: Uint8Array | null = null;
-    let lastSmcCount = 0;
-    const hitAccum = new Uint32Array(PROG_LEN);
-
-    for (let s = 0; s < evalSeeds.length; s++) {
-      const res = evaluateAgentDetailed(
-        agent.genome,
-        taskId,
-        evalSeeds[s],
-        bitWidth,
-        36,
-        {
-          allowSmc: options.allowSmc,
-          coGenome: prevBestCoGenome,
-          maxCycles: cycleCap,
-          initialEnv: options.initialEnv,
-        }
-      );
-      totalScore += res.score;
-      for (let k = 0; k < PROG_LEN; k++) {
-        if (res.hitCounts[k] > 0) hitAccum[k] = 1;
-      }
-      if (s === evalSeeds.length - 1) {
-        lastModifiedCode = res.modifiedCode;
-        lastSmcCount = res.smcModifiedCount;
-      }
+  const { evaluated, activeSlotsByAgent } = evaluatePopulationSlice(
+    population,
+    taskId,
+    generation,
+    bitWidth,
+    {
+      allowSmc: options.allowSmc,
+      inheritSmc: options.inheritSmc,
+      coGenome: prevBestCoGenome,
+      maxCycles: cycleCap,
+      initialEnv: options.initialEnv,
     }
+  );
 
-    const activeSlots: number[] = [];
-    for (let k = 0; k < PROG_LEN; k++) {
-      if (hitAccum[k] > 0) activeSlots.push(k);
+  const { nextPopulation, bestFitness, meanFitness, bestAgent } = selectAndBreedPopulation(
+    evaluated,
+    activeSlotsByAgent,
+    taskId,
+    generation,
+    mutationRate,
+    bitWidth,
+    {
+      allowSmc: options.allowSmc,
+      dualCore: options.dualCore,
+      fromScratch: options.fromScratch,
     }
-    activeSlotsByAgent[i] = activeSlots;
-
-    agent.fitness = totalScore / evalSeeds.length;
-    if (options.allowSmc && options.inheritSmc && lastModifiedCode && lastSmcCount > 0) {
-      agent.genome = new Uint8Array(lastModifiedCode);
-    }
-    sum += agent.fitness;
-  }
-
-  // === Fitness Sharing (Niching) ===
-  // Reduce fitness of similar genomes to maintain diversity and discover creative solutions.
-  // Uses opcode-based similarity: genomes with similar instruction patterns share fitness.
-  {
-    const SHARING_RADIUS = 0.35; // similarity threshold (0-1)
-    const SHARING_STRENGTH = 0.4; // max fitness reduction (0-1)
-    const sharedFitness = new Array(popSize);
-    for (let i = 0; i < popSize; i++) {
-      sharedFitness[i] = population[i].fitness;
-    }
-    for (let i = 0; i < popSize; i++) {
-      let nicheCount = 1;
-      const gi = population[i].genome;
-      for (let j = i + 1; j < popSize; j++) {
-        const gj = population[j].genome;
-        // Compute similarity: fraction of matching opcodes (byte 0 of each instruction)
-        let matchCount = 0;
-        for (let k = 0; k < PROG_LEN; k++) {
-          if (gi[k * 4] === gj[k * 4]) matchCount++;
-        }
-        const similarity = matchCount / PROG_LEN;
-        if (similarity > SHARING_RADIUS) {
-          // Distance from niche center (1 = identical, 0 = at threshold)
-          const distance = (similarity - SHARING_RADIUS) / (1.0 - SHARING_RADIUS);
-          nicheCount += distance;
-        }
-        // Also check active slots overlap for behavioral similarity
-        const slotsI = activeSlotsByAgent[i];
-        const slotsJ = activeSlotsByAgent[j];
-        if (slotsI.length > 0 && slotsJ.length > 0) {
-          let overlap = 0;
-          for (const s of slotsI) {
-            if (slotsJ.includes(s)) overlap++;
-          }
-          const jaccard = overlap / (slotsI.length + slotsJ.length - overlap);
-          if (jaccard > 0.5) {
-            nicheCount += (jaccard - 0.5) * 2; // scale 0.5-1 → 0-1
-          }
-        }
-      }
-      // Apply sharing: reduce fitness proportionally to niche crowding
-      const penalty = Math.min(SHARING_STRENGTH, (nicheCount - 1) / nicheCount * SHARING_STRENGTH);
-      sharedFitness[i] = population[i].fitness * (1.0 - penalty);
-    }
-    // Update agent fitness with shared values
-    for (let i = 0; i < popSize; i++) {
-      population[i].fitness = sharedFitness[i];
-    }
-  }
-
-  const indexed = population.map((agent, origIdx) => ({
-    agent,
-    activeSlots: activeSlotsByAgent[origIdx],
-  }));
-  indexed.sort((a, b) => b.agent.fitness - a.agent.fitness);
-
-  const bestAgent = indexed[0].agent;
-  const meanFitness = sum / popSize;
+  );
 
   const eliteCount = Math.max(2, Math.floor(popSize / 8));
   const parentSpan = Math.max(4, Math.floor(popSize * 0.33));
-  const freshImmigrants = Math.max(2, Math.floor(popSize * 0.08));
-  const nextPopulation: Agent[] = [];
-  const seenElites = new Set<string>();
-  const TOURNAMENT_SIZE = 5;
-
-  // Toernooiselectie helper
-  const tournamentSelect = () => {
-    let best = Math.floor(rng() * popSize);
-    for (let t = 1; t < TOURNAMENT_SIZE; t++) {
-      const candidate = Math.floor(rng() * popSize);
-      if (indexed[candidate].agent.fitness > indexed[best].agent.fitness) best = candidate;
-    }
-    return indexed[best];
-  };
-
-  // === REVIVAL MECHANISM: als alle elites uitgestorven zijn, injecteer meer starters ===
-  // Als de top elites allemaal negatieve fitness hebben (uitgestorven), vervang ze door starters
-  const allElitesDead = indexed.length > 0 && indexed[0].agent.fitness < -50;
-  const revivalCount = allElitesDead ? Math.max(eliteCount, Math.floor(popSize * 0.4)) : 0;
-
-  for (let i = 0; i < indexed.length && nextPopulation.length < eliteCount; i++) {
-    const key = genomeDiversityKey(indexed[i].agent.genome);
-    if (!seenElites.has(key)) {
-      seenElites.add(key);
-      // Skip dode elites als revival actief is
-      if (allElitesDead && indexed[i].agent.fitness < -50) continue;
-      nextPopulation.push({
-        id: nextPopulation.length,
-        genome: new Uint8Array(indexed[i].agent.genome),
-        fitness: indexed[i].agent.fitness,
-        generationBorn: indexed[i].agent.generationBorn,
-      });
-    }
-  }
-
-  // Versie met forceSense voor arena, hardware en ecosystem: 50% random genomes krijgen SENSE
-  const forceSense = taskId === 'arena' || taskId === 'hardware' || taskId === 'ecosystem';
-  // Bij revival: injecteer MEER starters (40% van populatie)
-  const immigrantCount = allElitesDead ? revivalCount : freshImmigrants;
-  for (let i = 0; i < immigrantCount && nextPopulation.length < popSize; i++) {
-    // 50% SEED_GENOME + mutatie, 50% volledig random
-    if (rng() < 0.50) {
-      const seedGenome = new Uint8Array(createStarterGenome(taskId));
-      for (let b = 0; b < PROG_LEN * 4; b++) {
-        if (rng() < 0.15) seedGenome[b] = Math.floor(rng() * 256);
-      }
-      nextPopulation.push({
-        id: nextPopulation.length,
-        genome: seedGenome,
-        fitness: 0,
-        generationBorn: generation + 1,
-      });
-    } else {
-      nextPopulation.push({
-        id: nextPopulation.length,
-        genome: createRandomGenome(rng, bitWidth, { dualCore: options.dualCore, isCoCore: false, forceSense }),
-        fitness: 0,
-        generationBorn: generation + 1,
-      });
-    }
-  }
-
-  // === FALLBACK: Starter genome blijft altijd in de populatie ===
-  // Zorg dat de starter genome altijd minstens 1 exemplaar heeft (als "zaadje")
-  const starterGenome = createStarterGenome(taskId);
-  const hasStarter = nextPopulation.some(a => {
-    // Check of dit genome lijkt op de starter (eerste 4 instructies vergelijken)
-    const stInst = decodeInstruction(starterGenome, 0);
-    const agInst = decodeInstruction(a.genome, 0);
-    return stInst.opcode === agInst.opcode && stInst.dst === agInst.dst && stInst.src === agInst.src;
-  });
-  if (!hasStarter && nextPopulation.length < popSize) {
-    nextPopulation.push({
-      id: nextPopulation.length,
-      genome: new Uint8Array(starterGenome),
-      fitness: 0,
-      generationBorn: generation + 1,
-    });
-  }
-
-  // Hogere mutatie in vroege generaties voor meer exploratie
-  const adaptiveMutationRate = mutationRate + (generation < 50 ? 0.04 : 0.0);
-
-  while (nextPopulation.length < popSize) {
-    const p1 = tournamentSelect();
-    const p2 = tournamentSelect();
-    const baseGenome =
-      rng() < 0.70 ? crossoverGenomes(p1.agent.genome, p2.agent.genome, rng) : p1.agent.genome;
-    const mutated = mutateGenome(baseGenome, adaptiveMutationRate, rng, {
-      bitWidth,
-      dualCore: options.dualCore,
-      isCoCore: false,
-      activeSlots: p1.activeSlots,
-      surgical: rng() < 0.68,
-      allowSmc: options.allowSmc,
-    });
-    nextPopulation.push({
-      id: nextPopulation.length,
-      genome: mutated,
-      fitness: 0,
-      generationBorn: generation + 1,
-    });
-  }
 
   // Dedicated Co-Processor Population (Kern B) co-evolves against Kern A's best agent via BUS0..BUS7
   let nextCoPopulation: Agent[] | null = null;
-  let coAgent: Agent | null = indexed.length > 1 ? indexed[1].agent : null;
+  const sortedEval = [...evaluated].sort((a, b) => b.fitness - a.fitness);
+  let coAgent: Agent | null = sortedEval.length > 1 ? sortedEval[1] : null;
   let coBestFitness: number | null = null;
 
   if (options.dualCore && activeCoPop) {
@@ -3945,7 +4031,7 @@ export function evolveGeneration(
           taskId,
           evalSeeds[s],
           bitWidth,
-          36,
+          evalTicks,
           {
             allowSmc: options.allowSmc,
             coGenome: co.genome,

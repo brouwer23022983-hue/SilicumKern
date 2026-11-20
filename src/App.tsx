@@ -19,6 +19,8 @@ import { BenchmarkView } from './components/BenchmarkView';
 import { CodeExportView, GITHUB_URL } from './components/CodeExportView';
 import { EvolutionChart, GenerationMetric } from './components/EvolutionChart';
 import { InstructionSetView } from './components/InstructionSetView';
+import { IntelliIDETab } from './components/IntelliIDETab';
+import { SourceSyncTab } from './components/SourceSyncTab';
 import {
   Agent,
   BitWidth,
@@ -46,6 +48,8 @@ import {
   encodeInstruction,
   formatHexBytes,
   runVMTick,
+  selectAndBreedCoPopulation,
+  selectAndBreedPopulation,
   stepEnvironment,
   stepSingleInstruction,
   updateEnvPorts,
@@ -62,7 +66,7 @@ import {
 } from './engine/hardwareProbe';
 import type { WorkerRequest, WorkerResponse } from './workers/evolutionWorker';
 
-type ActiveView = 'workbench' | 'isa' | 'benchmark' | 'export';
+type ActiveView = 'workbench' | 'isa' | 'benchmark' | 'export' | 'intelliide' | 'sync';
 
 
 const STORAGE_KEY = 'siliciumkern_saved_state_v2';
@@ -157,14 +161,13 @@ function initPopulation(
   dualCore: boolean = false
 ): Agent[] {
   const rng = createRng(seed);
+  const portCount = taskId === 'ecosystem' ? 16 : 8;
+  const forceSense = taskId === 'arena' || taskId === 'hardware' || taskId === 'ecosystem';
   const agents: Agent[] = [];
   for (let i = 0; i < popSize; i++) {
-    let genome: Uint8Array;
-    // Every agent is fully independent — own genome, own navigation, own strategy
-    // The dispatcher brain is only built for the main avatar, not the population
-    genome =
+    const genome =
       fromScratch || i > 0
-        ? createRandomGenome(rng, bitWidth, { dualCore, isCoCore: false })
+        ? createRandomGenome(rng, bitWidth, { dualCore, isCoCore: false, forceSense, portCount })
         : createStarterGenome(taskId);
     agents.push({
       id: i,
@@ -297,12 +300,21 @@ export default function App() {
   const [logBuffer, setLogBuffer] = useState<LogEntry[]>([]);
   const maxLogLines = 500;
 
-  const log = (text: string, type: LogEntry['type'] = 'info') => {
-    setLogBuffer(prev => {
-      const next = [...prev, { tick: env.tick, generation, text, type }];
+  const log = useCallback((text: string, type: LogEntry['type'] = 'info') => {
+    setLogBuffer((prev) => {
+      const next = [
+        ...prev,
+        { tick: envRef.current.tick, generation: generationRef.current, text, type },
+      ];
       return next.length > maxLogLines ? next.slice(-maxLogLines) : next;
     });
-  };
+  }, []);
+
+  useEffect(() => {
+    const onClear = () => setLogBuffer([]);
+    window.addEventListener('output-console-clear', onClear);
+    return () => window.removeEventListener('output-console-clear', onClear);
+  }, []);
 
   const handleConsoleCommand = (cmd: string) => {
     const trimmed = cmd.trim().toLowerCase();
@@ -498,6 +510,16 @@ export default function App() {
 
   const mutationRateRef = useRef<number>(mutationRate);
   mutationRateRef.current = mutationRate;
+
+  const isEvolvingRef = useRef<boolean>(isEvolving);
+  isEvolvingRef.current = isEvolving;
+
+  const fromScratchRef = useRef<boolean>(fromScratch);
+  fromScratchRef.current = fromScratch;
+
+  const evalLoopTimerRef = useRef<number | null>(null);
+  const requestIdRef = useRef<number>(0);
+  const dispatchGenerationRef = useRef<((targetSession: number) => void) | null>(null);
 
   const syncVmToState = useCallback(() => {
     const v = vmRef.current;
@@ -750,12 +772,7 @@ export default function App() {
   );
 
   const runOneGeneration = useCallback(() => {
-    const workers = workerRefs.current;
-    if (workers.length === 0) return;
-    const msg: WorkerRequest = { type: 'step', sessionId: sessionIdRef.current };
-    for (const w of workers) {
-      w.postMessage(msg);
-    }
+    dispatchGenerationRef.current?.(sessionIdRef.current);
   }, []);
 
   const stepOneTick = useCallback(() => {
@@ -763,6 +780,7 @@ export default function App() {
       resetLivePreview(taskId);
       return;
     }
+    const activeTask = envRef.current.taskId;
     if (dualCoreRef.current) {
       const coKernel =
         bestCoGenomeRef.current ?? coPopulationRef.current?.[0]?.genome ?? bestGenomeRef.current;
@@ -772,7 +790,7 @@ export default function App() {
         envRef.current.ports,
         bitWidthRef.current,
         maxCyclesRef.current,
-        { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current }
+        { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current, taskId: activeTask }
       );
     }
     const { action, didAct } = runVMTick(
@@ -781,7 +799,7 @@ export default function App() {
       envRef.current.ports,
       bitWidthRef.current,
       maxCyclesRef.current,
-      { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current }
+      { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current, taskId: activeTask }
     );
     const dist = pendingDisturbanceRef.current;
     pendingDisturbanceRef.current = {};
@@ -837,7 +855,7 @@ export default function App() {
       vmRef.current,
       envRef.current.ports,
       bitWidthRef.current,
-      { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current }
+      { allowSmc: allowSmcRef.current, sharedBus: sharedBusRef.current, taskId: envRef.current.taskId }
     );
     if (res.acted) {
       const dist = pendingDisturbanceRef.current;
@@ -865,8 +883,8 @@ export default function App() {
     syncVmToState();
   }, [syncVmToState]);
 
-  // Persistent Evolution Web Worker Pool lifecycle (non-blocking UI)
-  // Gebruikt recommendedWorkerCount workers (helft van beschikbare threads)
+  // Persistent Parallel Worker Pool: workers evaluate population slices in parallel,
+  // and coordinator runs selectAndBreedPopulation globally across the full population!
   useEffect(() => {
     const workerCount = Math.max(1, detectedHw.recommendedWorkerCount);
     workerCountRef.current = workerCount;
@@ -880,160 +898,336 @@ export default function App() {
     }
     workerRefs.current = workers;
 
-    // Buffer om resultaten van alle workers te verzamelen per generatie
-    const generationResultsRef = {
-      pending: 0,
-      results: [] as WorkerResponse[],
-      targetSession: 0,
+    interface PendingMainGen {
+      requestId: number;
+      sessionId: number;
+      expectedChunks: number;
+      receivedChunks: number;
+      genTask: TaskId;
+      genNum: number;
+      genMut: number;
+      genWidth: BitWidth;
+      genAllowSmc: boolean;
+      genDualCore: boolean;
+      genFromScratch: boolean;
+      genMaxCycles: number;
+      slicesEvaluated: Agent[][];
+      slicesSlots: number[][][];
+    }
+
+    interface PendingCoGen {
+      requestId: number;
+      sessionId: number;
+      expectedChunks: number;
+      receivedChunks: number;
+      genNum: number;
+      genMut: number;
+      genWidth: BitWidth;
+      genAllowSmc: boolean;
+      nextPopulation: Agent[];
+      bestFitness: number;
+      meanFitness: number;
+      bestAgent: Agent;
+      slicesEvaluated: Agent[][];
+    }
+
+    let pendingMain: PendingMainGen | null = null;
+    let pendingCo: PendingCoGen | null = null;
+
+    const finalizeGeneration = (
+      targetSession: number,
+      nextGenNum: number,
+      nextPop: Agent[],
+      nextCoPop: Agent[] | null,
+      bestFitness: number,
+      meanFitness: number,
+      coBestFitness: number | null,
+      bestAgent: Agent,
+      coAgent: Agent | null
+    ) => {
+      if (targetSession !== sessionIdRef.current) return;
+
+      const bestGenomeNext = new Uint8Array(bestAgent.genome);
+      const bestCoGenomeNext = coAgent ? new Uint8Array(coAgent.genome) : null;
+      const bestChanged = !genomesEqual(bestGenomeRef.current, bestGenomeNext);
+
+      populationRef.current = nextPop;
+      coPopulationRef.current = nextCoPop;
+      generationRef.current = nextGenNum;
+      bestGenomeRef.current = bestGenomeNext;
+      bestCoGenomeRef.current = bestCoGenomeNext;
+
+      setPopulation(nextPop);
+      setCoPopulation(nextCoPop);
+      setCoBestFitness(coBestFitness);
+      setGeneration(nextGenNum);
+      setBestGenome(bestGenomeNext);
+      setBestCoGenome(bestCoGenomeNext);
+
+      setMetrics((prev) => {
+        const updated = [
+          ...prev,
+          {
+            generation: nextGenNum,
+            bestFitness,
+            meanFitness,
+          },
+        ];
+        return updated.length > 120 ? updated.slice(updated.length - 120) : updated;
+      });
+
+      if (taskIdRef.current === 'ecosystem') {
+        advanceEcoZoneEvolution(envRef.current);
+        const miSwitched = advanceEcoMiStage(envRef.current);
+        if (miSwitched) {
+          const prevStage = (envRef.current.ecoMiStage + 5) % 6;
+          saveMiStageGenome(prevStage, bestGenomeNext);
+          setDnaStrand(getDnaStrandStatus());
+          setEnv({ ...envRef.current });
+        }
+        if (!envRef.current.alive) {
+          resetLivePreview(taskIdRef.current, bestGenomeNext, bestCoGenomeNext);
+        } else {
+          // Preserve VM short-term/long-term memory and RAM during hot-swap!
+          vmRef.current.activeCode = new Uint8Array(bestGenomeNext);
+          vmRef.current.smcModified.fill(0);
+          if (dualCoreRef.current) {
+            const coKernel = bestCoGenomeNext ?? bestGenomeNext;
+            vmBRef.current.activeCode = new Uint8Array(coKernel);
+            vmBRef.current.smcModified.fill(0);
+          }
+        }
+      } else {
+        if (!envRef.current.alive || bestChanged) {
+          resetLivePreview(taskIdRef.current, bestGenomeNext, bestCoGenomeNext);
+        }
+      }
+
+      const miStage = taskIdRef.current === 'ecosystem' ? envRef.current.ecoMiStage : -1;
+      const miStageName = miStage >= 0 ? MI_STAGES[miStage]?.name ?? '' : '';
+      log(
+        `Gen ${nextGenNum} | Best: ${bestFitness.toFixed(1)} | Mean: ${meanFitness.toFixed(1)}${miStageName ? ` | 🧠 ${miStageName}` : ''}`,
+        'evolution'
+      );
+
+      if (isEvolvingRef.current && targetSession === sessionIdRef.current) {
+        if (evalLoopTimerRef.current !== null) {
+          window.clearTimeout(evalLoopTimerRef.current);
+        }
+        evalLoopTimerRef.current = window.setTimeout(() => {
+          evalLoopTimerRef.current = null;
+          if (isEvolvingRef.current && targetSession === sessionIdRef.current) {
+            dispatchGeneration(targetSession);
+          }
+        }, 16);
+      }
     };
+
+    const dispatchGeneration = (targetSession: number) => {
+      if (targetSession !== sessionIdRef.current) return;
+      if (pendingMain && pendingMain.sessionId === targetSession) return;
+      if (pendingCo && pendingCo.sessionId === targetSession) return;
+
+      const pop = populationRef.current;
+      if (pop.length === 0) return;
+
+      const reqId = ++requestIdRef.current;
+      const activeWorkers = Math.min(workerCount, pop.length);
+      const chunkSize = Math.ceil(pop.length / activeWorkers);
+      const coBest =
+        dualCoreRef.current && coPopulationRef.current && coPopulationRef.current.length > 0
+          ? new Uint8Array(coPopulationRef.current[0].genome)
+          : null;
+
+      pendingMain = {
+        requestId: reqId,
+        sessionId: targetSession,
+        expectedChunks: 0,
+        receivedChunks: 0,
+        genTask: taskIdRef.current,
+        genNum: generationRef.current,
+        genMut: mutationRateRef.current,
+        genWidth: bitWidthRef.current,
+        genAllowSmc: allowSmcRef.current,
+        genDualCore: dualCoreRef.current,
+        genFromScratch: fromScratchRef.current,
+        genMaxCycles: maxCyclesRef.current,
+        slicesEvaluated: [],
+        slicesSlots: [],
+      };
+
+      const assignments: Array<{ worker: Worker; slice: Agent[]; idx: number }> = [];
+      for (let i = 0; i < activeWorkers; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(start + chunkSize, pop.length);
+        if (start >= end) break;
+        assignments.push({ worker: workers[i], slice: pop.slice(start, end), idx: i });
+      }
+
+      pendingMain.expectedChunks = assignments.length;
+      pendingMain.slicesEvaluated = new Array(assignments.length);
+      pendingMain.slicesSlots = new Array(assignments.length);
+
+      for (const a of assignments) {
+        const msg: WorkerRequest = {
+          type: 'eval-slice',
+          sessionId: targetSession,
+          requestId: reqId,
+          slice: a.slice,
+          taskId: pendingMain.genTask,
+          generation: pendingMain.genNum,
+          bitWidth: pendingMain.genWidth,
+          allowSmc: pendingMain.genAllowSmc,
+          inheritSmc: inheritSmcRef.current,
+          coGenome: coBest,
+          maxCycles: pendingMain.genMaxCycles,
+          initialEnv: pendingMain.genTask === 'ecosystem' ? envRef.current : null,
+        };
+        a.worker.postMessage(msg);
+      }
+    };
+
+    dispatchGenerationRef.current = dispatchGeneration;
 
     for (let i = 0; i < workerCount; i++) {
       const w = workers[i];
       w.onmessage = (event: MessageEvent<WorkerResponse>) => {
         const msg = event.data;
-        if (!msg || msg.type !== 'generation') return;
-        if (msg.sessionId !== sessionIdRef.current) return;
+        if (!msg) return;
 
-        // Voeg resultaat toe aan buffer
-        generationResultsRef.results.push(msg);
-
-        // Als alle workers hebben gerapporteerd, voeg resultaten samen
-        if (generationResultsRef.results.length === workerCount) {
-          // Combineer alle sub-populaties
-          const allPop: Agent[] = [];
-          const allCoPop: Agent[] = [];
-          let bestFitness = -Infinity;
-          let meanFitnessSum = 0;
-          // Fallback: als geen enkele agent overleefde, gebruik het starter genome
-          let bestGenome: Uint8Array = createStarterGenome(taskIdRef.current);
-          let bestCoGenome: Uint8Array | null = null;
-          let coBestFitness: number | null = null;
-          let maxGeneration = 0;
-
-          for (const r of generationResultsRef.results as WorkerResponse[]) {
-            if (r.type !== 'generation') continue;
-            allPop.push(...r.nextPopulation);
-            if (r.nextCoPopulation) allCoPop.push(...r.nextCoPopulation);
-            if (r.bestFitness > bestFitness) {
-              bestFitness = r.bestFitness;
-              bestGenome = new Uint8Array(r.bestGenome);
-            }
-            meanFitnessSum += r.meanFitness;
-            if (r.coBestFitness !== null) {
-              if (coBestFitness === null || r.coBestFitness > coBestFitness) {
-                coBestFitness = r.coBestFitness;
-                bestCoGenome = r.coGenome ? new Uint8Array(r.coGenome) : null;
-              }
-            }
-            if (r.generation > maxGeneration) maxGeneration = r.generation;
+        if (msg.type === 'slice-result') {
+          if (!pendingMain || msg.requestId !== pendingMain.requestId || msg.sessionId !== sessionIdRef.current) {
+            return;
           }
+          pendingMain.slicesEvaluated[i] = msg.evaluated;
+          pendingMain.slicesSlots[i] = msg.activeSlotsByAgent;
+          pendingMain.receivedChunks += 1;
 
-          const meanFitness = meanFitnessSum / workerCount;
-          const bestChanged = !genomesEqual(bestGenomeRef.current, bestGenome);
+          if (pendingMain.receivedChunks === pendingMain.expectedChunks) {
+            const done = pendingMain;
+            pendingMain = null;
 
-          populationRef.current = allPop;
-          coPopulationRef.current = allCoPop.length > 0 ? allCoPop : null;
-          generationRef.current = maxGeneration;
-          bestGenomeRef.current = bestGenome;
-          bestCoGenomeRef.current = bestCoGenome;
-
-          setPopulation(allPop);
-          setCoPopulation(coPopulationRef.current);
-          setCoBestFitness(coBestFitness);
-          setGeneration(maxGeneration);
-          setBestGenome(bestGenome);
-          setBestCoGenome(bestCoGenome);
-
-          setMetrics((prev) => {
-            const updated = [
-              ...prev,
+            const allEvaluated = done.slicesEvaluated.flat();
+            const allSlots = done.slicesSlots.flat();
+            const { nextPopulation, bestFitness, meanFitness, bestAgent } = selectAndBreedPopulation(
+              allEvaluated,
+              allSlots,
+              done.genTask,
+              done.genNum,
+              done.genMut,
+              done.genWidth,
               {
-                generation: maxGeneration,
+                allowSmc: done.genAllowSmc,
+                dualCore: done.genDualCore,
+                fromScratch: done.genFromScratch,
+              }
+            );
+
+            const coPop = coPopulationRef.current;
+            if (done.genDualCore && coPop && coPop.length > 0) {
+              const coReqId = ++requestIdRef.current;
+              const coWorkers = Math.min(workerCount, coPop.length);
+              const coChunkSize = Math.ceil(coPop.length / coWorkers);
+              const coAssignments: Array<{ worker: Worker; slice: Agent[] }> = [];
+              for (let c = 0; c < coWorkers; c++) {
+                const start = c * coChunkSize;
+                const end = Math.min(start + coChunkSize, coPop.length);
+                if (start >= end) break;
+                coAssignments.push({ worker: workers[c], slice: coPop.slice(start, end) });
+              }
+              pendingCo = {
+                requestId: coReqId,
+                sessionId: done.sessionId,
+                expectedChunks: coAssignments.length,
+                receivedChunks: 0,
+                genNum: done.genNum,
+                genMut: done.genMut,
+                genWidth: done.genWidth,
+                genAllowSmc: done.genAllowSmc,
+                nextPopulation,
                 bestFitness,
                 meanFitness,
-              },
-            ];
-            return updated.length > 120 ? updated.slice(updated.length - 120) : updated;
-          });
-
-          // For ecosystem: advance zone-based evolution AND MI stage after each generation
-          if (taskIdRef.current === 'ecosystem') {
-            advanceEcoZoneEvolution(envRef.current);
-            const miSwitched = advanceEcoMiStage(envRef.current);
-            if (miSwitched) {
-              // MI stage switched — save the best genome of the previous stage to DNA strand
-              const prevStage = (envRef.current.ecoMiStage + 5) % 6; // stage we just left
-              saveMiStageGenome(prevStage, bestGenome);
-              // Update DNA strand status
-              setDnaStrand(getDnaStrandStatus());
-              // Update the UI to reflect the new stage
-              setEnv({ ...envRef.current });
-            }
-            if (!envRef.current.alive) {
-              resetLivePreview(taskIdRef.current, bestGenome, bestCoGenome);
-            } else {
-              // Hot-swap the genome: update VM code without resetting environment
-              const freshVm = createVMState(bestGenome);
-              vmRef.current = freshVm;
-              if (dualCoreRef.current) {
-                const coKernel = bestCoGenome ?? bestGenome;
-                vmBRef.current = createVMState(coKernel);
+                bestAgent,
+                slicesEvaluated: new Array(coAssignments.length),
+              };
+              for (const ca of coAssignments) {
+                ca.worker.postMessage({
+                  type: 'eval-co-slice',
+                  sessionId: done.sessionId,
+                  requestId: coReqId,
+                  slice: ca.slice,
+                  primaryGenome: new Uint8Array(bestAgent.genome),
+                  taskId: done.genTask,
+                  generation: done.genNum,
+                  bitWidth: done.genWidth,
+                  allowSmc: done.genAllowSmc,
+                  maxCycles: done.genMaxCycles,
+                } satisfies WorkerRequest);
               }
-            }
-          } else {
-            if (!envRef.current.alive || bestChanged) {
-              resetLivePreview(taskIdRef.current, bestGenome, bestCoGenome);
+            } else {
+              const evalSorted = [...allEvaluated].sort((a, b) => b.fitness - a.fitness);
+              const fallbackCo = evalSorted.length > 1 ? evalSorted[1] : null;
+              finalizeGeneration(
+                done.sessionId,
+                done.genNum + 1,
+                nextPopulation,
+                null,
+                bestFitness,
+                meanFitness,
+                null,
+                bestAgent,
+                fallbackCo
+              );
             }
           }
+          return;
+        }
 
-          // Loggen van generatie-uitkomst (evolution type)
-          const miStage = taskIdRef.current === 'ecosystem' ? envRef.current.ecoMiStage : -1;
-          const miStageName = miStage >= 0 ? MI_STAGES[miStage]?.name ?? '' : '';
-          log(
-            `Gen ${maxGeneration} | Best: ${bestFitness.toFixed(1)} | Mean: ${meanFitness.toFixed(1)}${miStageName ? ` | 🧠 ${miStageName}` : ''}`,
-            'evolution'
-          );
-          // Also log as info for the "Alles" filter
-          log(`Gen ${maxGeneration} | Best: ${bestFitness.toFixed(1)} | Mean: ${meanFitness.toFixed(1)}`, 'info');
-
-          // Reset buffer voor volgende generatie
-          generationResultsRef.results = [];
+        if (msg.type === 'co-slice-result') {
+          if (!pendingCo || msg.requestId !== pendingCo.requestId || msg.sessionId !== sessionIdRef.current) {
+            return;
+          }
+          pendingCo.slicesEvaluated[i] = msg.evaluated;
+          pendingCo.receivedChunks += 1;
+          if (pendingCo.receivedChunks === pendingCo.expectedChunks) {
+            const doneCo = pendingCo;
+            pendingCo = null;
+            const allCo = doneCo.slicesEvaluated.flat();
+            const bredCo = selectAndBreedCoPopulation(
+              allCo,
+              doneCo.genNum,
+              doneCo.genMut,
+              doneCo.genWidth,
+              doneCo.genAllowSmc
+            );
+            finalizeGeneration(
+              doneCo.sessionId,
+              doneCo.genNum + 1,
+              doneCo.nextPopulation,
+              bredCo.nextCoPopulation,
+              doneCo.bestFitness,
+              doneCo.meanFitness,
+              bredCo.coBestFitness,
+              doneCo.bestAgent,
+              bredCo.coAgent
+            );
+          }
         }
       };
     }
 
-    // Initialiseer alle workers met de volledige populatie (worker verdeelt zelf)
-    const initSync: WorkerRequest = {
-      type: 'sync',
-      sessionId: sessionIdRef.current,
-      population: populationRef.current,
-      coPopulation: coPopulationRef.current,
-      taskId: taskIdRef.current,
-      generation: generationRef.current,
-      mutationRate: mutationRateRef.current,
-      bitWidth: bitWidthRef.current,
-      allowSmc: allowSmcRef.current,
-      inheritSmc: inheritSmcRef.current,
-      dualCore: dualCoreRef.current,
-      maxCycles: maxCyclesRef.current,
-      workerIndex: 0,
-      totalWorkers: workerCount,
-    };
-    for (let i = 0; i < workerCount; i++) {
-      const syncMsg: WorkerRequest = {
-        ...initSync,
-        workerIndex: i,
-      };
-      workers[i].postMessage(syncMsg);
-    }
-
     return () => {
+      if (evalLoopTimerRef.current !== null) {
+        window.clearTimeout(evalLoopTimerRef.current);
+        evalLoopTimerRef.current = null;
+      }
+      dispatchGenerationRef.current = null;
       for (const w of workers) {
         w.terminate();
       }
       workerRefs.current = [];
     };
-  }, [resetLivePreview, detectedHw.recommendedWorkerCount]);
+  }, [resetLivePreview, detectedHw.recommendedWorkerCount, log]);
 
   // Live HID / Gamepad / Camera peripheral stream monitor
   useEffect(() => {
@@ -1114,34 +1308,14 @@ export default function App() {
   }, [taskId, mutationRate, bitWidth, allowSmc, inheritSmc, dualCore, maxCycles]);
 
   useEffect(() => {
-    const workers = workerRefs.current;
-    if (workers.length === 0) return;
     if (isEvolving) {
-      // When starting evolution, sync current live environment state so evolution
-      // continues from where the avatar currently is (position, day phase, memory)
-      const currentEnv = envRef.current;
-      syncWorkerState(
-        populationRef.current,
-        coPopulationRef.current,
-        taskIdRef.current,
-        generationRef.current,
-        bitWidthRef.current,
-        dualCoreRef.current,
-        false,
-        maxCyclesRef.current,
-        currentEnv.taskId === 'ecosystem' ? currentEnv : null
-      );
-      // Resume live simulation so avatar moves while evolving
       setIsSimRunning(true);
-      for (const w of workers) {
-        w.postMessage({ type: 'start', sessionId: sessionIdRef.current } satisfies WorkerRequest);
-      }
-    } else {
-      for (const w of workers) {
-        w.postMessage({ type: 'stop' } satisfies WorkerRequest);
-      }
+      dispatchGenerationRef.current?.(sessionIdRef.current);
+    } else if (evalLoopTimerRef.current !== null) {
+      window.clearTimeout(evalLoopTimerRef.current);
+      evalLoopTimerRef.current = null;
     }
-  }, [isEvolving, syncWorkerState]);
+  }, [isEvolving]);
 
   useEffect(() => {
     if (!isSimRunning || activeView !== 'workbench') return;
@@ -1305,13 +1479,15 @@ export default function App() {
           SiliciumKern
         </a>
 
-        <nav className="flex items-center gap-6 text-sm font-medium">
+        <nav className="flex items-center gap-5 text-sm font-medium overflow-x-auto">
           {(
             [
               ['workbench', 'Werkbank'],
               ['isa', 'Instructieset'],
               ['benchmark', 'Benchmark'],
               ['export', 'Code-export'],
+              ['intelliide', 'IntelliIDE'],
+              ['sync', 'Sources Sync'],
             ] as const
           ).map(([viewKey, label]) => (
             <button
@@ -1355,10 +1531,10 @@ export default function App() {
                 Autonome machinetaal-kern
               </h1>
               <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                44 hardware-opcodes over 16/32/64-bit scalaire registers, 128-bit SIMD en zelf-modificatie.
+                44+ hardware-opcodes en 212 SSE2/SIMD vector-opcodes over 16/32/64-bit registers en zelf-modificatie.
               </p>
               <div className="mt-2.5 text-xs font-mono text-cyan-400">
-                384 B/kern · {totalPopulationKB} KB totaal · 0 B VRAM
+                256 B/kern · {((popSize * PROG_LEN * 4) / 1024).toFixed(1)} KB totaal · 0 B VRAM
               </div>
             </div>
 
@@ -2121,7 +2297,7 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 border-b border-slate-800 bg-[#0E1320]">
                 <div>
                   <span className="text-xs font-semibold text-slate-200">
-                    Live Machinetaal-Genoom (32 instructies · 128 bytes)
+                    Live Machinetaal-Genoom ({PROG_LEN} instructies · {PROG_LEN * 4} bytes)
                   </span>
                   <span className="text-xs text-slate-400 ml-3">
                     Klik op een instructie om direct hex/opcodes te wijzigen
@@ -2183,9 +2359,12 @@ export default function App() {
                       }
                       className="bg-[#080B12] border border-slate-700 rounded px-2 py-1 font-mono text-slate-100"
                     >
-                      {[0, 1, 2, 3, 4, 5, 6, 7].map((r) => (
+                      {(taskId === 'ecosystem'
+                        ? [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+                        : [0, 1, 2, 3, 4, 5, 6, 7]
+                      ).map((r) => (
                         <option key={r} value={r}>
-                          R{r} / P{r}
+                          {r < 8 ? `R${r} / P${r}` : `P${r}`}
                         </option>
                       ))}
                     </select>
@@ -2311,6 +2490,29 @@ export default function App() {
             popSize={popSize}
             generation={generation}
           />
+        </main>
+      )}
+
+      {activeView === 'intelliide' && (
+        <IntelliIDETab
+          vmRef={vmRef}
+          bestGenome={bestGenome}
+          generation={generation}
+          bestFitness={metrics.length > 0 ? metrics[metrics.length - 1].bestFitness : 0}
+          meanFitness={metrics.length > 0 ? metrics[metrics.length - 1].meanFitness : 0}
+          isEvolving={isEvolving}
+          miStage={env.ecoMiStage}
+          miStageGenerations={env.ecoMiStageGenerations}
+          miStageGenTarget={env.ecoMiStageGenTarget}
+          taskId={taskId}
+          logs={logBuffer}
+          onCommand={handleConsoleCommand}
+        />
+      )}
+
+      {activeView === 'sync' && (
+        <main className="flex-1 p-6 max-w-7xl w-full mx-auto flex flex-col">
+          <SourceSyncTab />
         </main>
       )}
     </div>
