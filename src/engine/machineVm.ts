@@ -1,5 +1,5 @@
-export const PROG_LEN = 32; // 32 instructions * 4 bytes = 128 bytes
-export const RAM_WORDS = 16; // 16 * 8 bytes = 128 bytes L1 scratchpad RAM
+export const PROG_LEN = 64; // 64 instructions * 4 bytes = 256 bytes
+export const RAM_WORDS = 32; // 32 * 8 bytes = 256 bytes L1 scratchpad RAM
 export const REG_COUNT = 8; // R0..R7
 export const XMM_COUNT = 4; // XMM0..XMM3 (4 x 32-bit lanes = 128-bit SIMD each)
 export const MAX_CYCLES_PER_TICK = 24;
@@ -51,11 +51,230 @@ export enum Opcode {
   PWRITE = 0x29,
   BWRITE = 0x2a,
   BREAD = 0x2b,
+  // === MMX (Pentium MMX, 1997) — SIMD integer op mm0-mm7 ===
+  PADDSB = 0x2c,
+  PADDSW = 0x2d,
+  PADDUSB = 0x2e,
+  PADDUSW = 0x2f,
+  PADDD = 0x30,
+  PADDQ = 0x31,
+  PSUBB = 0x32,
+  PSUBW = 0x33,
+  PSUBSB = 0x34,
+  PSUBSW = 0x35,
+  PSUBUSB = 0x36,
+  PSUBUSW = 0x37,
+  PSUBD = 0x38,
+  PSUBQ = 0x39,
+  PMULLW = 0x3a,
+  PMULHW = 0x3b,
+  PMULHWS = 0x3c,
+  PMULUDQ = 0x3d,
+  PSLLW = 0x3e,
+  PSLLD = 0x3f,
+  PSLLQ = 0x40,
+  PSRLW = 0x41,
+  PSRLD = 0x42,
+  PSRLQ = 0x43,
+  PSRAW = 0x44,
+  PSRAD = 0x45,
+  PCMPEQB = 0x46,
+  PCMPEQW = 0x47,
+  PCMPEQD = 0x48,
+  PACKSSWB = 0x49,
+  PACKUSWB = 0x4a,
+  PACKSSDW = 0x4b,
+  PUNPCKHBW = 0x4c,
+  PUNPCKHWD = 0x4d,
+  PUNPCKHDQ = 0x4e,
+  PUNPCKLHBW = 0x4f,
+  PUNPCKLWD = 0x50,
+  PUNPCKLDQ = 0x51,
+  PAND = 0x52,
+  PANDN = 0x53,
+  POR = 0x54,
+  PXOR = 0x55,
+  MOVQ = 0x56,
+  EMMS = 0x57,
+  // === SSE (Pentium III, 1999) — SIMD floating-point op xmm0-xmm7 ===
+  ADDSS = 0x58,
+  ADDPS = 0x59,
+  MULSS = 0x5a,
+  MULPS = 0x5b,
+  SUBSS = 0x5c,
+  SUBPS = 0x5d,
+  DIVSS = 0x5e,
+  DIVPS = 0x5f,
+  MINSS = 0x60,
+  MINPS = 0x61,
+  MAXSS = 0x62,
+  MAXPS = 0x63,
+  SQRTSS = 0x64,
+  SQRTPS = 0x65,
+  CMPSS = 0x66,
+  CMPPS = 0x67,
+  MOVSS = 0x68,
+  MOVPS = 0x69,
+  MOVAPS = 0x6a,
+  MOVUPS = 0x6b,
+  MOVHLPS = 0x6c,
+  MOVLHPS = 0x6d,
+  MOVMSKPS = 0x6e,
+  SHUFPS = 0x6f,
+  UNPCKLPS = 0x70,
+  UNPCKHPS = 0x71,
+  CVTSS2SI = 0x72,
+  CVTSI2SS = 0x73,
+  CVTSS2SD = 0x74,
+  CVTSD2SS = 0x75,
+  // === SSE2 (Pentium 4, 2000) — SIMD integer+FP op xmm ===
+  MOVDQA = 0x76,
+  MOVDQU = 0x77,
+  MOVDDUP = 0x78,
+  MOVSHDUP = 0x79,
+  MOVSLDUP = 0x7a,
+  PADDSB2 = 0x7b,
+  PADDSW2 = 0x7c,
+  PADDUSB2 = 0x7d,
+  PADDUSW2 = 0x7e,
+  PADDD2 = 0x7f,
+  PADDQ2 = 0x80,
+  PSUBB2 = 0x81,
+  PSUBW2 = 0x82,
+  PSUBSB2 = 0x83,
+  PSUBSW2 = 0x84,
+  PSUBUSB2 = 0x85,
+  PSUBUSW2 = 0x86,
+  PSUBD2 = 0x87,
+  PSUBQ2 = 0x88,
+  PMULLW2 = 0x89,
+  PMULHW2 = 0x8a,
+  PMULUDQ2 = 0x8b,
+  PSLLW2 = 0x8c,
+  PSLLD2 = 0x8d,
+  PSLLQ2 = 0x8e,
+  PSRLW2 = 0x8f,
+  PSRLD2 = 0x90,
+  PSRLQ2 = 0x91,
+  PSRAW2 = 0x92,
+  PSRAD2 = 0x93,
+  PCMPEQB2 = 0x94,
+  PCMPEQW2 = 0x95,
+  PCMPEQD2 = 0x96,
+  PACKSSWB2 = 0x97,
+  PACKUSWB2 = 0x98,
+  PACKSSDW2 = 0x99,
+  PUNPCKHBW2 = 0x9a,
+  PUNPCKHWD2 = 0x9b,
+  PUNPCKHDQ2 = 0x9c,
+  PUNPCKLHBW2 = 0x9d,
+  PUNPCKLWD2 = 0x9e,
+  PUNPCKLDQ2 = 0x9f,
+  PAND2 = 0xa0,
+  PANDN2 = 0xa1,
+  POR2 = 0xa2,
+  PXOR2 = 0xa3,
+  PMINSW = 0xa4,
+  PMAXSW = 0xa5,
+  PMINUB = 0xa6,
+  PMAXUB = 0xa7,
+  PMINSW2 = 0xa8,
+  PMAXSW2 = 0xa9,
+  PAVGB = 0xaa,
+  PAVGW = 0xab,
+  MOVMSKDQ = 0xac,
+  CVTDQ2PS = 0xad,
+  CVTPS2DQ = 0xae,
+  CVTDQ2PD = 0xaf,
+  CVTPD2DQ = 0xb0,
+  ADDPD = 0xb1,
+  MULPD = 0xb2,
+  SUBPD = 0xb3,
+  DIVPD = 0xb4,
+  MINPD = 0xb5,
+  MAXPD = 0xb6,
+  SQRTPD = 0xb7,
+  CMPPD = 0xb8,
+  MOVAPD = 0xb9,
+  MOVUPD = 0xba,
+  MOVSD = 0xbb,
+  MOVHPD = 0xbc,
+  MOVLPD = 0xbd,
+  UNPCKLPD = 0xbe,
+  UNPCKHPD = 0xbf,
+  CVTSI2SD = 0xc0,
+  CVTSD2SI = 0xc1,
+  CVTSS2SI2 = 0xc2,
+  CVTSI2SS2 = 0xc3,
+  ADDSUBPS = 0xc4,
+  ADDSUBPD = 0xc5,
+  HADDPS = 0xc6,
+  HSUBPS = 0xc7,
+  HADDPD = 0xc8,
+  HSUBPD = 0xc9,
+  LDDQU = 0xca,
+  MOVNTDQ = 0xcb,
+  // === SSE3 (Pentium 4 HT, 2004) ===
+  FADDSS = 0xcc,
+  FMULSS = 0xcd,
+  MONITOR = 0xce,
+  MWAIT = 0xcf,
+  // === Extra SIMD voor evolutie ===
+  VSUB = 0xd0,
+  VMUL = 0xd1,
+  VDIV = 0xd2,
+  VMIN = 0xd3,
+  VMAX = 0xd4,
+  VAND = 0xd5,
+  VOR = 0xd6,
+  VSHUFFLE = 0xd7,
+  VUNPCKH = 0xd8,
+  VUNPCKL = 0xd9,
+  VMOVMSK = 0xda,
+  VMOV = 0xdb,
+  VMOVHL = 0xdc,
+  VMOVLH = 0xdd,
+  VCMPEQ = 0xde,
+  VCMPLT = 0xdf,
+  VCMPLE = 0xe0,
+  VABS = 0xe1,
+  VNEG = 0xe2,
+  VSQRT = 0xe3,
+  VRSQRT = 0xe4,
+  VRCPPS = 0xe5,
+  VEXTRACT = 0xe6,
+  VINSERT = 0xe7,
+  VBLEND = 0xe8,
+  VPERM = 0xe9,
+  VSHL = 0xea,
+  VSHR = 0xeb,
+  VROL = 0xec,
+  VROR = 0xed,
+  VPOPCNT = 0xee,
+  VBSWAP = 0xef,
+  // === Extra flow & memory ===
+  JGE = 0xf0,
+  JLE = 0xf1,
+  JG = 0xf2,
+  CALL = 0xf3,
+  RET = 0xf4,
+  PUSH = 0xf5,
+  POP = 0xf6,
+  CMOVE = 0xf7,
+  CMOVNE = 0xf8,
+  CMOVGE = 0xf9,
+  CMOVLE = 0xfa,
+  CMOVG = 0xfb,
+  // === Extra ALU ===
+  IMUL = 0xfc,
+  SAL = 0xfd,
+  SAR = 0xfe,
+  SETC = 0xff,
 }
 
-export const OPCODE_COUNT = 44;
+export const OPCODE_COUNT = 256;
 
-export type OpcodeCategory = 'data' | 'alu' | 'bit' | 'flow' | 'mem' | 'simd' | 'io' | 'smc';
+export type OpcodeCategory = 'data' | 'alu' | 'bit' | 'flow' | 'mem' | 'simd' | 'simd_mmx' | 'simd_sse' | 'simd_sse2' | 'simd_sse3' | 'io' | 'smc';
 
 export interface OpcodeMeta {
   code: Opcode;
@@ -110,6 +329,171 @@ export const OPCODE_TABLE: OpcodeMeta[] = [
   { code: Opcode.PWRITE, mnemonic: 'PWRITE', category: 'smc', syntax: 'PWRITE [Rd], Rs', description: 'Zelf-modificatie: herschrijf eigen code op @Rd met waarde Rs.' },
   { code: Opcode.BWRITE, mnemonic: 'BWRITE', category: 'smc', syntax: 'BWRITE [Rd], Rs', description: 'Multi-kern bus: schrijf Rs naar gedeeld buskanaal BUS[Rd & 7].' },
   { code: Opcode.BREAD, mnemonic: 'BREAD', category: 'smc', syntax: 'BREAD Rd, [Rs]', description: 'Multi-kern bus: lees gedeeld buskanaal BUS[Rs & 7] in Rd.' },
+  // === MMX (Pentium MMX, 1997) ===
+  { code: Opcode.PADDSB, mnemonic: 'PADDSB', category: 'simd_mmx', syntax: 'PADDSB Xd, Xs', description: 'MMX: signed byte saturating add over 128-bit vector.' },
+  { code: Opcode.PADDSW, mnemonic: 'PADDSW', category: 'simd_mmx', syntax: 'PADDSW Xd, Xs', description: 'MMX: signed word saturating add over 128-bit vector.' },
+  { code: Opcode.PADDUSB, mnemonic: 'PADDUSB', category: 'simd_mmx', syntax: 'PADDUSB Xd, Xs', description: 'MMX: unsigned byte saturating add.' },
+  { code: Opcode.PADDUSW, mnemonic: 'PADDUSW', category: 'simd_mmx', syntax: 'PADDUSW Xd, Xs', description: 'MMX: unsigned word saturating add.' },
+  { code: Opcode.PADDD, mnemonic: 'PADDD', category: 'simd_mmx', syntax: 'PADDD Xd, Xs', description: 'MMX: parallel 32-bit integer add (4 lanes).' },
+  { code: Opcode.PADDQ, mnemonic: 'PADDQ', category: 'simd_mmx', syntax: 'PADDQ Xd, Xs', description: 'MMX: parallel 64-bit integer add (2 lanes).' },
+  { code: Opcode.PSUBB, mnemonic: 'PSUBB', category: 'simd_mmx', syntax: 'PSUBB Xd, Xs', description: 'MMX: parallel byte subtract.' },
+  { code: Opcode.PSUBW, mnemonic: 'PSUBW', category: 'simd_mmx', syntax: 'PSUBW Xd, Xs', description: 'MMX: parallel word subtract.' },
+  { code: Opcode.PSUBSB, mnemonic: 'PSUBSB', category: 'simd_mmx', syntax: 'PSUBSB Xd, Xs', description: 'MMX: signed byte saturating subtract.' },
+  { code: Opcode.PSUBSW, mnemonic: 'PSUBSW', category: 'simd_mmx', syntax: 'PSUBSW Xd, Xs', description: 'MMX: signed word saturating subtract.' },
+  { code: Opcode.PSUBUSB, mnemonic: 'PSUBUSB', category: 'simd_mmx', syntax: 'PSUBUSB Xd, Xs', description: 'MMX: unsigned byte saturating subtract.' },
+  { code: Opcode.PSUBUSW, mnemonic: 'PSUBUSW', category: 'simd_mmx', syntax: 'PSUBUSW Xd, Xs', description: 'MMX: unsigned word saturating subtract.' },
+  { code: Opcode.PSUBD, mnemonic: 'PSUBD', category: 'simd_mmx', syntax: 'PSUBD Xd, Xs', description: 'MMX: parallel 32-bit subtract.' },
+  { code: Opcode.PSUBQ, mnemonic: 'PSUBQ', category: 'simd_mmx', syntax: 'PSUBQ Xd, Xs', description: 'MMX: parallel 64-bit subtract.' },
+  { code: Opcode.PMULLW, mnemonic: 'PMULLW', category: 'simd_mmx', syntax: 'PMULLW Xd, Xs', description: 'MMX: parallel low word multiply (8×16→16).' },
+  { code: Opcode.PMULHW, mnemonic: 'PMULHW', category: 'simd_mmx', syntax: 'PMULHW Xd, Xs', description: 'MMX: parallel high word multiply (8×16→16 signed).' },
+  { code: Opcode.PMULHWS, mnemonic: 'PMULHWS', category: 'simd_mmx', syntax: 'PMULHWS Xd, Xs', description: 'MMX: parallel high word multiply with rounding.' },
+  { code: Opcode.PMULUDQ, mnemonic: 'PMULUDQ', category: 'simd_mmx', syntax: 'PMULUDQ Xd, Xs', description: 'MMX: unsigned doubleword multiply (4×32→32 high).' },
+  { code: Opcode.PSLLW, mnemonic: 'PSLLW', category: 'simd_mmx', syntax: 'PSLLW Xd, Xs', description: 'MMX: parallel logical shift left word.' },
+  { code: Opcode.PSLLD, mnemonic: 'PSLLD', category: 'simd_mmx', syntax: 'PSLLD Xd, Xs', description: 'MMX: parallel logical shift left dword.' },
+  { code: Opcode.PSLLQ, mnemonic: 'PSLLQ', category: 'simd_mmx', syntax: 'PSLLQ Xd, Xs', description: 'MMX: parallel logical shift left qword.' },
+  { code: Opcode.PSRLW, mnemonic: 'PSRLW', category: 'simd_mmx', syntax: 'PSRLW Xd, Xs', description: 'MMX: parallel logical shift right word.' },
+  { code: Opcode.PSRLD, mnemonic: 'PSRLD', category: 'simd_mmx', syntax: 'PSRLD Xd, Xs', description: 'MMX: parallel logical shift right dword.' },
+  { code: Opcode.PSRLQ, mnemonic: 'PSRLQ', category: 'simd_mmx', syntax: 'PSRLQ Xd, Xs', description: 'MMX: parallel logical shift right qword.' },
+  { code: Opcode.PSRAW, mnemonic: 'PSRAW', category: 'simd_mmx', syntax: 'PSRAW Xd, Xs', description: 'MMX: parallel arithmetic shift right word.' },
+  { code: Opcode.PSRAD, mnemonic: 'PSRAD', category: 'simd_mmx', syntax: 'PSRAD Xd, Xs', description: 'MMX: parallel arithmetic shift right dword.' },
+  { code: Opcode.PCMPEQB, mnemonic: 'PCMPEQB', category: 'simd_mmx', syntax: 'PCMPEQB Xd, Xs', description: 'MMX: parallel compare bytes equal.' },
+  { code: Opcode.PCMPEQW, mnemonic: 'PCMPEQW', category: 'simd_mmx', syntax: 'PCMPEQW Xd, Xs', description: 'MMX: parallel compare words equal.' },
+  { code: Opcode.PCMPEQD, mnemonic: 'PCMPEQD', category: 'simd_mmx', syntax: 'PCMPEQD Xd, Xs', description: 'MMX: parallel compare dwords equal.' },
+  { code: Opcode.PACKSSWB, mnemonic: 'PACKSSWB', category: 'simd_mmx', syntax: 'PACKSSWB Xd, Xs', description: 'MMX: pack words to bytes with saturation.' },
+  { code: Opcode.PACKUSWB, mnemonic: 'PACKUSWB', category: 'simd_mmx', syntax: 'PACKUSWB Xd, Xs', description: 'MMX: pack words to unsigned bytes.' },
+  { code: Opcode.PACKSSDW, mnemonic: 'PACKSSDW', category: 'simd_mmx', syntax: 'PACKSSDW Xd, Xs', description: 'MMX: pack dwords to words with saturation.' },
+  { code: Opcode.PUNPCKHBW, mnemonic: 'PUNPCKHBW', category: 'simd_mmx', syntax: 'PUNPCKHBW Xd, Xs', description: 'MMX: unpack high bytes/words.' },
+  { code: Opcode.PUNPCKHWD, mnemonic: 'PUNPCKHWD', category: 'simd_mmx', syntax: 'PUNPCKHWD Xd, Xs', description: 'MMX: unpack high words/dwords.' },
+  { code: Opcode.PUNPCKHDQ, mnemonic: 'PUNPCKHDQ', category: 'simd_mmx', syntax: 'PUNPCKHDQ Xd, Xs', description: 'MMX: unpack high dwords/qwords.' },
+  { code: Opcode.PUNPCKLHBW, mnemonic: 'PUNPCKLHBW', category: 'simd_mmx', syntax: 'PUNPCKLHBW Xd, Xs', description: 'MMX: unpack low bytes/words.' },
+  { code: Opcode.PUNPCKLWD, mnemonic: 'PUNPCKLWD', category: 'simd_mmx', syntax: 'PUNPCKLWD Xd, Xs', description: 'MMX: unpack low words/dwords.' },
+  { code: Opcode.PUNPCKLDQ, mnemonic: 'PUNPCKLDQ', category: 'simd_mmx', syntax: 'PUNPCKLDQ Xd, Xs', description: 'MMX: unpack low dwords/qwords.' },
+  { code: Opcode.PAND, mnemonic: 'PAND', category: 'simd_mmx', syntax: 'PAND Xd, Xs', description: 'MMX: parallel AND over 128 bits.' },
+  { code: Opcode.PANDN, mnemonic: 'PANDN', category: 'simd_mmx', syntax: 'PANDN Xd, Xs', description: 'MMX: parallel AND NOT.' },
+  { code: Opcode.POR, mnemonic: 'POR', category: 'simd_mmx', syntax: 'POR Xd, Xs', description: 'MMX: parallel OR over 128 bits.' },
+  { code: Opcode.PXOR, mnemonic: 'PXOR', category: 'simd_mmx', syntax: 'PXOR Xd, Xs', description: 'MMX: parallel XOR over 128 bits.' },
+  { code: Opcode.MOVQ, mnemonic: 'MOVQ', category: 'simd_mmx', syntax: 'MOVQ Xd, Xs', description: 'MMX: move 64-bit between vector registers.' },
+  { code: Opcode.EMMS, mnemonic: 'EMMS', category: 'simd_mmx', syntax: 'EMMS', description: 'MMX: empty MMX state (clear vector registers).' },
+  // === SSE (Pentium III, 1999) ===
+  { code: Opcode.ADDSS, mnemonic: 'ADDSS', category: 'simd_sse', syntax: 'ADDSS Xd, Xs', description: 'SSE: add scalar single-precision FP (lane 0).' },
+  { code: Opcode.ADDPS, mnemonic: 'ADDPS', category: 'simd_sse', syntax: 'ADDPS Xd, Xs', description: 'SSE: add packed single-precision FP (4 lanes).' },
+  { code: Opcode.MULSS, mnemonic: 'MULSS', category: 'simd_sse', syntax: 'MULSS Xd, Xs', description: 'SSE: multiply scalar single-precision FP.' },
+  { code: Opcode.MULPS, mnemonic: 'MULPS', category: 'simd_sse', syntax: 'MULPS Xd, Xs', description: 'SSE: multiply packed single-precision FP.' },
+  { code: Opcode.SUBSS, mnemonic: 'SUBSS', category: 'simd_sse', syntax: 'SUBSS Xd, Xs', description: 'SSE: subtract scalar single-precision FP.' },
+  { code: Opcode.SUBPS, mnemonic: 'SUBPS', category: 'simd_sse', syntax: 'SUBPS Xd, Xs', description: 'SSE: subtract packed single-precision FP.' },
+  { code: Opcode.DIVSS, mnemonic: 'DIVSS', category: 'simd_sse', syntax: 'DIVSS Xd, Xs', description: 'SSE: divide scalar single-precision FP.' },
+  { code: Opcode.DIVPS, mnemonic: 'DIVPS', category: 'simd_sse', syntax: 'DIVPS Xd, Xs', description: 'SSE: divide packed single-precision FP.' },
+  { code: Opcode.MINSS, mnemonic: 'MINSS', category: 'simd_sse', syntax: 'MINSS Xd, Xs', description: 'SSE: minimum scalar single-precision FP.' },
+  { code: Opcode.MINPS, mnemonic: 'MINPS', category: 'simd_sse', syntax: 'MINPS Xd, Xs', description: 'SSE: minimum packed single-precision FP.' },
+  { code: Opcode.MAXSS, mnemonic: 'MAXSS', category: 'simd_sse', syntax: 'MAXSS Xd, Xs', description: 'SSE: maximum scalar single-precision FP.' },
+  { code: Opcode.MAXPS, mnemonic: 'MAXPS', category: 'simd_sse', syntax: 'MAXPS Xd, Xs', description: 'SSE: maximum packed single-precision FP.' },
+  { code: Opcode.SQRTSS, mnemonic: 'SQRTSS', category: 'simd_sse', syntax: 'SQRTSS Xd, Xs', description: 'SSE: square root scalar single-precision FP.' },
+  { code: Opcode.SQRTPS, mnemonic: 'SQRTPS', category: 'simd_sse', syntax: 'SQRTPS Xd, Xs', description: 'SSE: square root packed single-precision FP.' },
+  { code: Opcode.CMPSS, mnemonic: 'CMPSS', category: 'simd_sse', syntax: 'CMPSS Xd, Xs', description: 'SSE: compare scalar single-precision FP.' },
+  { code: Opcode.CMPPS, mnemonic: 'CMPPS', category: 'simd_sse', syntax: 'CMPPS Xd, Xs', description: 'SSE: compare packed single-precision FP.' },
+  { code: Opcode.MOVSS, mnemonic: 'MOVSS', category: 'simd_sse', syntax: 'MOVSS Xd, Xs', description: 'SSE: move scalar single-precision FP.' },
+  { code: Opcode.MOVPS, mnemonic: 'MOVPS', category: 'simd_sse', syntax: 'MOVPS Xd, Xs', description: 'SSE: move packed single-precision FP.' },
+  { code: Opcode.MOVAPS, mnemonic: 'MOVAPS', category: 'simd_sse', syntax: 'MOVAPS Xd, Xs', description: 'SSE: move aligned packed single-precision FP.' },
+  { code: Opcode.MOVUPS, mnemonic: 'MOVUPS', category: 'simd_sse', syntax: 'MOVUPS Xd, Xs', description: 'SSE: move unaligned packed single-precision FP.' },
+  { code: Opcode.MOVHLPS, mnemonic: 'MOVHLPS', category: 'simd_sse', syntax: 'MOVHLPS Xd, Xs', description: 'SSE: move high FP to low.' },
+  { code: Opcode.MOVLHPS, mnemonic: 'MOVLHPS', category: 'simd_sse', syntax: 'MOVLHPS Xd, Xs', description: 'SSE: move low FP to high.' },
+  { code: Opcode.MOVMSKPS, mnemonic: 'MOVMSKPS', category: 'simd_sse', syntax: 'MOVMSKPS Rd, Xs', description: 'SSE: extract sign mask to scalar.' },
+  { code: Opcode.SHUFPS, mnemonic: 'SHUFPS', category: 'simd_sse', syntax: 'SHUFPS Xd, Xs', description: 'SSE: shuffle packed single-precision FP.' },
+  { code: Opcode.UNPCKLPS, mnemonic: 'UNPCKLPS', category: 'simd_sse', syntax: 'UNPCKLPS Xd, Xs', description: 'SSE: unpack low single-precision FP.' },
+  { code: Opcode.UNPCKHPS, mnemonic: 'UNPCKHPS', category: 'simd_sse', syntax: 'UNPCKHPS Xd, Xs', description: 'SSE: unpack high single-precision FP.' },
+  { code: Opcode.CVTSS2SI, mnemonic: 'CVTSS2SI', category: 'simd_sse', syntax: 'CVTSS2SI Rd, Xs', description: 'SSE: convert scalar FP to integer.' },
+  { code: Opcode.CVTSI2SS, mnemonic: 'CVTSI2SS', category: 'simd_sse', syntax: 'CVTSI2SS Xd, Rs', description: 'SSE: convert integer to scalar FP.' },
+  { code: Opcode.CVTSS2SD, mnemonic: 'CVTSS2SD', category: 'simd_sse', syntax: 'CVTSS2SD Xd, Xs', description: 'SSE: convert single to double precision.' },
+  { code: Opcode.CVTSD2SS, mnemonic: 'CVTSD2SS', category: 'simd_sse', syntax: 'CVTSD2SS Xd, Xs', description: 'SSE: convert double to single precision.' },
+  // === SSE2 (Pentium 4, 2000) ===
+  { code: Opcode.MOVDQA, mnemonic: 'MOVDQA', category: 'simd_sse2', syntax: 'MOVDQA Xd, Xs', description: 'SSE2: move aligned 128-bit integer.' },
+  { code: Opcode.MOVDQU, mnemonic: 'MOVDQU', category: 'simd_sse2', syntax: 'MOVDQU Xd, Xs', description: 'SSE2: move unaligned 128-bit integer.' },
+  { code: Opcode.MOVDDUP, mnemonic: 'MOVDDUP', category: 'simd_sse2', syntax: 'MOVDDUP Xd, Xs', description: 'SSE2: move and duplicate double-precision.' },
+  { code: Opcode.MOVSHDUP, mnemonic: 'MOVSHDUP', category: 'simd_sse2', syntax: 'MOVSHDUP Xd, Xs', description: 'SSE2: move high single-precision duplicate.' },
+  { code: Opcode.MOVSLDUP, mnemonic: 'MOVSLDUP', category: 'simd_sse2', syntax: 'MOVSLDUP Xd, Xs', description: 'SSE2: move low single-precision duplicate.' },
+  { code: Opcode.PAVGB, mnemonic: 'PAVGB', category: 'simd_sse2', syntax: 'PAVGB Xd, Xs', description: 'SSE2: average bytes.' },
+  { code: Opcode.PAVGW, mnemonic: 'PAVGW', category: 'simd_sse2', syntax: 'PAVGW Xd, Xs', description: 'SSE2: average words.' },
+  { code: Opcode.PMINSW, mnemonic: 'PMINSW', category: 'simd_sse2', syntax: 'PMINSW Xd, Xs', description: 'SSE2: minimum signed words.' },
+  { code: Opcode.PMAXSW, mnemonic: 'PMAXSW', category: 'simd_sse2', syntax: 'PMAXSW Xd, Xs', description: 'SSE2: maximum signed words.' },
+  { code: Opcode.PMINUB, mnemonic: 'PMINUB', category: 'simd_sse2', syntax: 'PMINUB Xd, Xs', description: 'SSE2: minimum unsigned bytes.' },
+  { code: Opcode.PMAXUB, mnemonic: 'PMAXUB', category: 'simd_sse2', syntax: 'PMAXUB Xd, Xs', description: 'SSE2: maximum unsigned bytes.' },
+  { code: Opcode.MOVMSKDQ, mnemonic: 'MOVMSKDQ', category: 'simd_sse2', syntax: 'MOVMSKDQ Rd, Xs', description: 'SSE2: extract quadword sign mask.' },
+  { code: Opcode.CVTDQ2PS, mnemonic: 'CVTDQ2PS', category: 'simd_sse2', syntax: 'CVTDQ2PS Xd, Xs', description: 'SSE2: convert dwords to single-precision FP.' },
+  { code: Opcode.CVTPS2DQ, mnemonic: 'CVTPS2DQ', category: 'simd_sse2', syntax: 'CVTPS2DQ Xd, Xs', description: 'SSE2: convert single-precision FP to dwords.' },
+  { code: Opcode.ADDPD, mnemonic: 'ADDPD', category: 'simd_sse2', syntax: 'ADDPD Xd, Xs', description: 'SSE2: add packed double-precision FP.' },
+  { code: Opcode.MULPD, mnemonic: 'MULPD', category: 'simd_sse2', syntax: 'MULPD Xd, Xs', description: 'SSE2: multiply packed double-precision FP.' },
+  { code: Opcode.SUBPD, mnemonic: 'SUBPD', category: 'simd_sse2', syntax: 'SUBPD Xd, Xs', description: 'SSE2: subtract packed double-precision FP.' },
+  { code: Opcode.DIVPD, mnemonic: 'DIVPD', category: 'simd_sse2', syntax: 'DIVPD Xd, Xs', description: 'SSE2: divide packed double-precision FP.' },
+  { code: Opcode.SQRTPD, mnemonic: 'SQRTPD', category: 'simd_sse2', syntax: 'SQRTPD Xd, Xs', description: 'SSE2: square root packed double-precision FP.' },
+  { code: Opcode.CMPPD, mnemonic: 'CMPPD', category: 'simd_sse2', syntax: 'CMPPD Xd, Xs', description: 'SSE2: compare packed double-precision FP.' },
+  { code: Opcode.MOVAPD, mnemonic: 'MOVAPD', category: 'simd_sse2', syntax: 'MOVAPD Xd, Xs', description: 'SSE2: move aligned packed double-precision.' },
+  { code: Opcode.MOVUPD, mnemonic: 'MOVUPD', category: 'simd_sse2', syntax: 'MOVUPD Xd, Xs', description: 'SSE2: move unaligned packed double-precision.' },
+  { code: Opcode.CVTSI2SD, mnemonic: 'CVTSI2SD', category: 'simd_sse2', syntax: 'CVTSI2SD Xd, Rs', description: 'SSE2: convert integer to scalar double-precision.' },
+  { code: Opcode.CVTSD2SI, mnemonic: 'CVTSD2SI', category: 'simd_sse2', syntax: 'CVTSD2SI Rd, Xs', description: 'SSE2: convert scalar double-precision to integer.' },
+  // === SSE3 (Pentium 4 HT, 2004) ===
+  { code: Opcode.ADDSUBPS, mnemonic: 'ADDSUBPS', category: 'simd_sse3', syntax: 'ADDSUBPS Xd, Xs', description: 'SSE3: horizontal add/subtract single-precision.' },
+  { code: Opcode.ADDSUBPD, mnemonic: 'ADDSUBPD', category: 'simd_sse3', syntax: 'ADDSUBPD Xd, Xs', description: 'SSE3: horizontal add/subtract double-precision.' },
+  { code: Opcode.HADDPS, mnemonic: 'HADDPS', category: 'simd_sse3', syntax: 'HADDPS Xd, Xs', description: 'SSE3: horizontal add single-precision FP.' },
+  { code: Opcode.HSUBPS, mnemonic: 'HSUBPS', category: 'simd_sse3', syntax: 'HSUBPS Xd, Xs', description: 'SSE3: horizontal subtract single-precision FP.' },
+  { code: Opcode.HADDPD, mnemonic: 'HADDPD', category: 'simd_sse3', syntax: 'HADDPD Xd, Xs', description: 'SSE3: horizontal add double-precision FP.' },
+  { code: Opcode.HSUBPD, mnemonic: 'HSUBPD', category: 'simd_sse3', syntax: 'HSUBPD Xd, Xs', description: 'SSE3: horizontal subtract double-precision FP.' },
+  { code: Opcode.LDDQU, mnemonic: 'LDDQU', category: 'simd_sse3', syntax: 'LDDQU Xd, [Rs]', description: 'SSE3: load unaligned 128-bit integer (non-temporal).' },
+  { code: Opcode.MOVNTDQ, mnemonic: 'MOVNTDQ', category: 'simd_sse3', syntax: 'MOVNTDQ [Rd], Xs', description: 'SSE3: non-temporal store 128-bit.' },
+  { code: Opcode.FADDSS, mnemonic: 'FADDSS', category: 'simd_sse3', syntax: 'FADDSS Xd, Xs', description: 'SSE3: fused add single-precision (FMA-like).' },
+  { code: Opcode.FMULSS, mnemonic: 'FMULSS', category: 'simd_sse3', syntax: 'FMULSS Xd, Xs', description: 'SSE3: fused multiply single-precision (FMA-like).' },
+  { code: Opcode.MONITOR, mnemonic: 'MONITOR', category: 'simd_sse3', syntax: 'MONITOR', description: 'SSE3: set monitor address for MWAIT.' },
+  { code: Opcode.MWAIT, mnemonic: 'MWAIT', category: 'simd_sse3', syntax: 'MWAIT', description: 'SSE3: monitor wait (low-power idle).' },
+  // === Extra SIMD voor evolutie ===
+  { code: Opcode.VSUB, mnemonic: 'VSUB', category: 'simd', syntax: 'VSUB Xd, Xs', description: '128-bit SIMD: parallel subtract over 4 lanes.' },
+  { code: Opcode.VMUL, mnemonic: 'VMUL', category: 'simd', syntax: 'VMUL Xd, Xs', description: '128-bit SIMD: parallel multiply over 4 lanes.' },
+  { code: Opcode.VDIV, mnemonic: 'VDIV', category: 'simd', syntax: 'VDIV Xd, Xs', description: '128-bit SIMD: parallel divide over 4 lanes.' },
+  { code: Opcode.VMIN, mnemonic: 'VMIN', category: 'simd', syntax: 'VMIN Xd, Xs', description: '128-bit SIMD: parallel minimum over 4 lanes.' },
+  { code: Opcode.VMAX, mnemonic: 'VMAX', category: 'simd', syntax: 'VMAX Xd, Xs', description: '128-bit SIMD: parallel maximum over 4 lanes.' },
+  { code: Opcode.VAND, mnemonic: 'VAND', category: 'simd', syntax: 'VAND Xd, Xs', description: '128-bit SIMD: parallel AND over 4 lanes.' },
+  { code: Opcode.VOR, mnemonic: 'VOR', category: 'simd', syntax: 'VOR Xd, Xs', description: '128-bit SIMD: parallel OR over 4 lanes.' },
+  { code: Opcode.VSHUFFLE, mnemonic: 'VSHUFFLE', category: 'simd', syntax: 'VSHUFFLE Xd, Xs', description: '128-bit SIMD: shuffle lanes based on imm.' },
+  { code: Opcode.VUNPCKH, mnemonic: 'VUNPCKH', category: 'simd', syntax: 'VUNPCKH Xd, Xs', description: '128-bit SIMD: unpack high lanes.' },
+  { code: Opcode.VUNPCKL, mnemonic: 'VUNPCKL', category: 'simd', syntax: 'VUNPCKL Xd, Xs', description: '128-bit SIMD: unpack low lanes.' },
+  { code: Opcode.VMOVMSK, mnemonic: 'VMOVMSK', category: 'simd', syntax: 'VMOVMSK Rd, Xs', description: '128-bit SIMD: extract sign mask to scalar.' },
+  { code: Opcode.VMOV, mnemonic: 'VMOV', category: 'simd', syntax: 'VMOV Xd, Xs', description: '128-bit SIMD: move entire vector.' },
+  { code: Opcode.VMOVHL, mnemonic: 'VMOVHL', category: 'simd', syntax: 'VMOVHL Xd, Xs', description: '128-bit SIMD: move high to low lanes.' },
+  { code: Opcode.VMOVLH, mnemonic: 'VMOVLH', category: 'simd', syntax: 'VMOVLH Xd, Xs', description: '128-bit SIMD: move low to high lanes.' },
+  { code: Opcode.VCMPEQ, mnemonic: 'VCMPEQ', category: 'simd', syntax: 'VCMPEQ Xd, Xs', description: '128-bit SIMD: compare equal (4 lanes).' },
+  { code: Opcode.VCMPLT, mnemonic: 'VCMPLT', category: 'simd', syntax: 'VCMPLT Xd, Xs', description: '128-bit SIMD: compare less than (4 lanes).' },
+  { code: Opcode.VCMPLE, mnemonic: 'VCMPLE', category: 'simd', syntax: 'VCMPLE Xd, Xs', description: '128-bit SIMD: compare less or equal (4 lanes).' },
+  { code: Opcode.VABS, mnemonic: 'VABS', category: 'simd', syntax: 'VABS Xd', description: '128-bit SIMD: absolute value (4 lanes).' },
+  { code: Opcode.VNEG, mnemonic: 'VNEG', category: 'simd', syntax: 'VNEG Xd', description: '128-bit SIMD: negate (4 lanes).' },
+  { code: Opcode.VSQRT, mnemonic: 'VSQRT', category: 'simd', syntax: 'VSQRT Xd', description: '128-bit SIMD: square root (4 lanes).' },
+  { code: Opcode.VRSQRT, mnemonic: 'VRSQRT', category: 'simd', syntax: 'VRSQRT Xd', description: '128-bit SIMD: reciprocal square root (approx).' },
+  { code: Opcode.VRCPPS, mnemonic: 'VRCPPS', category: 'simd', syntax: 'VRCPPS Xd', description: '128-bit SIMD: reciprocal (1/x, approx).' },
+  { code: Opcode.VEXTRACT, mnemonic: 'VEXTRACT', category: 'simd', syntax: 'VEXTRACT Rd, Xs', description: '128-bit SIMD: extract lane to scalar.' },
+  { code: Opcode.VINSERT, mnemonic: 'VINSERT', category: 'simd', syntax: 'VINSERT Xd, Rs', description: '128-bit SIMD: insert scalar into lane.' },
+  { code: Opcode.VBLEND, mnemonic: 'VBLEND', category: 'simd', syntax: 'VBLEND Xd, Xs', description: '128-bit SIMD: blend lanes from two vectors.' },
+  { code: Opcode.VPERM, mnemonic: 'VPERM', category: 'simd', syntax: 'VPERM Xd, Xs', description: '128-bit SIMD: permute lanes.' },
+  { code: Opcode.VSHL, mnemonic: 'VSHL', category: 'simd', syntax: 'VSHL Xd, Xs', description: '128-bit SIMD: logical shift left (4 lanes).' },
+  { code: Opcode.VSHR, mnemonic: 'VSHR', category: 'simd', syntax: 'VSHR Xd, Xs', description: '128-bit SIMD: logical shift right (4 lanes).' },
+  { code: Opcode.VROL, mnemonic: 'VROL', category: 'simd', syntax: 'VROL Xd, Xs', description: '128-bit SIMD: rotate left (4 lanes).' },
+  { code: Opcode.VROR, mnemonic: 'VROR', category: 'simd', syntax: 'VROR Xd, Xs', description: '128-bit SIMD: rotate right (4 lanes).' },
+  { code: Opcode.VPOPCNT, mnemonic: 'VPOPCNT', category: 'simd', syntax: 'VPOPCNT Xd', description: '128-bit SIMD: population count (4 lanes).' },
+  { code: Opcode.VBSWAP, mnemonic: 'VBSWAP', category: 'simd', syntax: 'VBSWAP Xd', description: '128-bit SIMD: byte swap (4 lanes).' },
+  // === Extra flow & memory ===
+  { code: Opcode.JGE, mnemonic: 'JGE', category: 'flow', syntax: 'JGE @addr', description: 'Spring als greater-or-equal (CF==SF of ZF==1).' },
+  { code: Opcode.JLE, mnemonic: 'JLE', category: 'flow', syntax: 'JLE @addr', description: 'Spring als less-or-equal (CF!=SF of ZF==1).' },
+  { code: Opcode.JG, mnemonic: 'JG', category: 'flow', syntax: 'JG @addr', description: 'Spring als greater (ZF==0 en CF==SF).' },
+  { code: Opcode.CALL, mnemonic: 'CALL', category: 'flow', syntax: 'CALL @addr', description: 'Subroutine call: push IP en spring naar adres.' },
+  { code: Opcode.RET, mnemonic: 'RET', category: 'flow', syntax: 'RET', description: 'Subroutine return: pop IP van stack.' },
+  { code: Opcode.PUSH, mnemonic: 'PUSH', category: 'mem', syntax: 'PUSH Rs', description: 'Push Rs op de stack (RAM).' },
+  { code: Opcode.POP, mnemonic: 'POP', category: 'mem', syntax: 'POP Rd', description: 'Pop waarde van stack naar Rd.' },
+  { code: Opcode.CMOVE, mnemonic: 'CMOVE', category: 'mem', syntax: 'CMOVE Rd, Rs', description: 'Conditional move als equal (ZF==1).' },
+  { code: Opcode.CMOVNE, mnemonic: 'CMOVNE', category: 'mem', syntax: 'CMOVNE Rd, Rs', description: 'Conditional move als not equal (ZF==0).' },
+  { code: Opcode.CMOVGE, mnemonic: 'CMOVGE', category: 'mem', syntax: 'CMOVGE Rd, Rs', description: 'Conditional move als greater-or-equal.' },
+  { code: Opcode.CMOVLE, mnemonic: 'CMOVLE', category: 'mem', syntax: 'CMOVLE Rd, Rs', description: 'Conditional move als less-or-equal.' },
+  { code: Opcode.CMOVG, mnemonic: 'CMOVG', category: 'mem', syntax: 'CMOVG Rd, Rs', description: 'Conditional move als greater.' },
+  // === Extra ALU ===
+  { code: Opcode.IMUL, mnemonic: 'IMUL', category: 'alu', syntax: 'IMUL Rd, Rs', description: 'Signed multiply (alias voor MUL, expliciete naam).' },
+  { code: Opcode.SAL, mnemonic: 'SAL', category: 'bit', syntax: 'SAL Rd, #n', description: 'Arithmetic shift left (alias voor SHL).' },
+  { code: Opcode.SAR, mnemonic: 'SAR', category: 'bit', syntax: 'SAR Rd, #n', description: 'Arithmetic shift right (sign-extending).' },
+  { code: Opcode.SETC, mnemonic: 'SETC', category: 'flow', syntax: 'SETC Rd', description: 'Zet Rd op 1 als CF==1, anders 0.' },
 ];
 
 export type TaskId = 'homeostasis' | 'arena' | 'bitstream' | 'hardware' | 'ecosystem';
@@ -192,13 +576,21 @@ export const TASKS: Record<TaskId, TaskSpec> = {
     name: 'Ecosysteem (4-in-1)',
     shortDesc: 'Navigeer door een bos met 4 zones: huisje (homeostasis), bos (arena), puzzelstenen (bitstream), en sensor-toren (hardware).',
     ports: [
-      'P0-P3: Zone-specifieke sensoren',
+      'P0: Zone-sensor A (temp/DX-energie/bitCurr/hwA)',
+      'P1: Zone-sensor B (queue/DY-energie/bitPrev/hwB)',
+      'P2: Zone-sensor C (energy/DX-hazard/tick&1/hwA^hwB)',
+      'P3: Zone-sensor D (temp-delta/DY-hazard/popcnt/hwMask)',
       'P4: Energie (%)',
       'P5: Klok-tick',
-      'P6: Zone-ID (0-3)',
-      'P7: Huisje-richting (DX/DY)',
+      'P6: Zone-ID (0=Huisje, 1=Bos, 2=Puzzel, 3=Toren)',
+      'P7: Huisje-richting (0=Noord, 1=Oost, 2=Zuid, 3=West)',
     ],
-    actions: ['0-3: Zone-actie (homeostasis/arena), 0-15: Bit-voorspelling (bitstream/hardware)'],
+    actions: [
+      'Zone 0 (Huisje): 0=Rust, 1=Werk, 2=Turbo, 3=Koelen',
+      'Zone 1 (Bos): 0=Noord, 1=Oost, 2=Zuid, 3=West',
+      'Zone 2 (Puzzel): ACT & 0x0F = Bit-voorspelling',
+      'Zone 3 (Toren): ACT & 0x0F = Bus-voorspelling',
+    ],
   },
 };
 
@@ -433,6 +825,171 @@ export function disassembleInstruction(inst: Instruction): string {
     case Opcode.PWRITE: return `PWRITE [${rd}], ${rs}`;
     case Opcode.BWRITE: return `BWRITE [${rd}], ${rs}`;
     case Opcode.BREAD: return `BREAD ${rd}, [${rs}]`;
+    // MMX
+    case Opcode.PADDSB: return `PADDSB ${xd}, ${xs}`;
+    case Opcode.PADDSW: return `PADDSW ${xd}, ${xs}`;
+    case Opcode.PADDUSB: return `PADDUSB ${xd}, ${xs}`;
+    case Opcode.PADDUSW: return `PADDUSW ${xd}, ${xs}`;
+    case Opcode.PADDD: return `PADDD ${xd}, ${xs}`;
+    case Opcode.PADDQ: return `PADDQ ${xd}, ${xs}`;
+    case Opcode.PSUBB: return `PSUBB ${xd}, ${xs}`;
+    case Opcode.PSUBW: return `PSUBW ${xd}, ${xs}`;
+    case Opcode.PSUBSB: return `PSUBSB ${xd}, ${xs}`;
+    case Opcode.PSUBSW: return `PSUBSW ${xd}, ${xs}`;
+    case Opcode.PSUBUSB: return `PSUBUSB ${xd}, ${xs}`;
+    case Opcode.PSUBUSW: return `PSUBUSW ${xd}, ${xs}`;
+    case Opcode.PSUBD: return `PSUBD ${xd}, ${xs}`;
+    case Opcode.PSUBQ: return `PSUBQ ${xd}, ${xs}`;
+    case Opcode.PMULLW: return `PMULLW ${xd}, ${xs}`;
+    case Opcode.PMULHW: return `PMULHW ${xd}, ${xs}`;
+    case Opcode.PMULHWS: return `PMULHWS ${xd}, ${xs}`;
+    case Opcode.PMULUDQ: return `PMULUDQ ${xd}, ${xs}`;
+    case Opcode.PSLLW: return `PSLLW ${xd}, ${xs}`;
+    case Opcode.PSLLD: return `PSLLD ${xd}, ${xs}`;
+    case Opcode.PSLLQ: return `PSLLQ ${xd}, ${xs}`;
+    case Opcode.PSRLW: return `PSRLW ${xd}, ${xs}`;
+    case Opcode.PSRLD: return `PSRLD ${xd}, ${xs}`;
+    case Opcode.PSRLQ: return `PSRLQ ${xd}, ${xs}`;
+    case Opcode.PSRAW: return `PSRAW ${xd}, ${xs}`;
+    case Opcode.PSRAD: return `PSRAD ${xd}, ${xs}`;
+    case Opcode.PCMPEQB: return `PCMPEQB ${xd}, ${xs}`;
+    case Opcode.PCMPEQW: return `PCMPEQW ${xd}, ${xs}`;
+    case Opcode.PCMPEQD: return `PCMPEQD ${xd}, ${xs}`;
+    case Opcode.PACKSSWB: return `PACKSSWB ${xd}, ${xs}`;
+    case Opcode.PACKUSWB: return `PACKUSWB ${xd}, ${xs}`;
+    case Opcode.PACKSSDW: return `PACKSSDW ${xd}, ${xs}`;
+    case Opcode.PUNPCKHBW: return `PUNPCKHBW ${xd}, ${xs}`;
+    case Opcode.PUNPCKHWD: return `PUNPCKHWD ${xd}, ${xs}`;
+    case Opcode.PUNPCKHDQ: return `PUNPCKHDQ ${xd}, ${xs}`;
+    case Opcode.PUNPCKLHBW: return `PUNPCKLHBW ${xd}, ${xs}`;
+    case Opcode.PUNPCKLWD: return `PUNPCKLWD ${xd}, ${xs}`;
+    case Opcode.PUNPCKLDQ: return `PUNPCKLDQ ${xd}, ${xs}`;
+    case Opcode.PAND: return `PAND ${xd}, ${xs}`;
+    case Opcode.PANDN: return `PANDN ${xd}, ${xs}`;
+    case Opcode.POR: return `POR ${xd}, ${xs}`;
+    case Opcode.PXOR: return `PXOR ${xd}, ${xs}`;
+    case Opcode.MOVQ: return `MOVQ ${xd}, ${xs}`;
+    case Opcode.EMMS: return 'EMMS';
+    // SSE
+    case Opcode.ADDSS: return `ADDSS ${xd}, ${xs}`;
+    case Opcode.ADDPS: return `ADDPS ${xd}, ${xs}`;
+    case Opcode.MULSS: return `MULSS ${xd}, ${xs}`;
+    case Opcode.MULPS: return `MULPS ${xd}, ${xs}`;
+    case Opcode.SUBSS: return `SUBSS ${xd}, ${xs}`;
+    case Opcode.SUBPS: return `SUBPS ${xd}, ${xs}`;
+    case Opcode.DIVSS: return `DIVSS ${xd}, ${xs}`;
+    case Opcode.DIVPS: return `DIVPS ${xd}, ${xs}`;
+    case Opcode.MINSS: return `MINSS ${xd}, ${xs}`;
+    case Opcode.MINPS: return `MINPS ${xd}, ${xs}`;
+    case Opcode.MAXSS: return `MAXSS ${xd}, ${xs}`;
+    case Opcode.MAXPS: return `MAXPS ${xd}, ${xs}`;
+    case Opcode.SQRTSS: return `SQRTSS ${xd}, ${xs}`;
+    case Opcode.SQRTPS: return `SQRTPS ${xd}, ${xs}`;
+    case Opcode.CMPSS: return `CMPSS ${xd}, ${xs}`;
+    case Opcode.CMPPS: return `CMPPS ${xd}, ${xs}`;
+    case Opcode.MOVSS: return `MOVSS ${xd}, ${xs}`;
+    case Opcode.MOVPS: return `MOVPS ${xd}, ${xs}`;
+    case Opcode.MOVAPS: return `MOVAPS ${xd}, ${xs}`;
+    case Opcode.MOVUPS: return `MOVUPS ${xd}, ${xs}`;
+    case Opcode.MOVHLPS: return `MOVHLPS ${xd}, ${xs}`;
+    case Opcode.MOVLHPS: return `MOVLHPS ${xd}, ${xs}`;
+    case Opcode.MOVMSKPS: return `MOVMSKPS ${rd}, ${xs}`;
+    case Opcode.SHUFPS: return `SHUFPS ${xd}, ${xs}`;
+    case Opcode.UNPCKLPS: return `UNPCKLPS ${xd}, ${xs}`;
+    case Opcode.UNPCKHPS: return `UNPCKHPS ${xd}, ${xs}`;
+    case Opcode.CVTSS2SI: return `CVTSS2SI ${rd}, ${xs}`;
+    case Opcode.CVTSI2SS: return `CVTSI2SS ${xd}, ${rs}`;
+    case Opcode.CVTSS2SD: return `CVTSS2SD ${xd}, ${xs}`;
+    case Opcode.CVTSD2SS: return `CVTSD2SS ${xd}, ${xs}`;
+    // SSE2
+    case Opcode.MOVDQA: return `MOVDQA ${xd}, ${xs}`;
+    case Opcode.MOVDQU: return `MOVDQU ${xd}, ${xs}`;
+    case Opcode.MOVDDUP: return `MOVDDUP ${xd}, ${xs}`;
+    case Opcode.MOVSHDUP: return `MOVSHDUP ${xd}, ${xs}`;
+    case Opcode.MOVSLDUP: return `MOVSLDUP ${xd}, ${xs}`;
+    case Opcode.PAVGB: return `PAVGB ${xd}, ${xs}`;
+    case Opcode.PAVGW: return `PAVGW ${xd}, ${xs}`;
+    case Opcode.PMINSW: return `PMINSW ${xd}, ${xs}`;
+    case Opcode.PMAXSW: return `PMAXSW ${xd}, ${xs}`;
+    case Opcode.PMINUB: return `PMINUB ${xd}, ${xs}`;
+    case Opcode.PMAXUB: return `PMAXUB ${xd}, ${xs}`;
+    case Opcode.MOVMSKDQ: return `MOVMSKDQ ${rd}, ${xs}`;
+    case Opcode.CVTDQ2PS: return `CVTDQ2PS ${xd}, ${xs}`;
+    case Opcode.CVTPS2DQ: return `CVTPS2DQ ${xd}, ${xs}`;
+    case Opcode.ADDPD: return `ADDPD ${xd}, ${xs}`;
+    case Opcode.MULPD: return `MULPD ${xd}, ${xs}`;
+    case Opcode.SUBPD: return `SUBPD ${xd}, ${xs}`;
+    case Opcode.DIVPD: return `DIVPD ${xd}, ${xs}`;
+    case Opcode.SQRTPD: return `SQRTPD ${xd}, ${xs}`;
+    case Opcode.CMPPD: return `CMPPD ${xd}, ${xs}`;
+    case Opcode.MOVAPD: return `MOVAPD ${xd}, ${xs}`;
+    case Opcode.MOVUPD: return `MOVUPD ${xd}, ${xs}`;
+    case Opcode.CVTSI2SD: return `CVTSI2SD ${xd}, ${rs}`;
+    case Opcode.CVTSD2SI: return `CVTSD2SI ${rd}, ${xs}`;
+    // SSE3
+    case Opcode.ADDSUBPS: return `ADDSUBPS ${xd}, ${xs}`;
+    case Opcode.ADDSUBPD: return `ADDSUBPD ${xd}, ${xs}`;
+    case Opcode.HADDPS: return `HADDPS ${xd}, ${xs}`;
+    case Opcode.HSUBPS: return `HSUBPS ${xd}, ${xs}`;
+    case Opcode.HADDPD: return `HADDPD ${xd}, ${xs}`;
+    case Opcode.HSUBPD: return `HSUBPD ${xd}, ${xs}`;
+    case Opcode.LDDQU: return `LDDQU ${xd}, [${rs}]`;
+    case Opcode.MOVNTDQ: return `MOVNTDQ [${rd}], ${xs}`;
+    case Opcode.FADDSS: return `FADDSS ${xd}, ${xs}`;
+    case Opcode.FMULSS: return `FMULSS ${xd}, ${xs}`;
+    case Opcode.MONITOR: return 'MONITOR';
+    case Opcode.MWAIT: return 'MWAIT';
+    // Extra SIMD
+    case Opcode.VSUB: return `VSUB ${xd}, ${xs}`;
+    case Opcode.VMUL: return `VMUL ${xd}, ${xs}`;
+    case Opcode.VDIV: return `VDIV ${xd}, ${xs}`;
+    case Opcode.VMIN: return `VMIN ${xd}, ${xs}`;
+    case Opcode.VMAX: return `VMAX ${xd}, ${xs}`;
+    case Opcode.VAND: return `VAND ${xd}, ${xs}`;
+    case Opcode.VOR: return `VOR ${xd}, ${xs}`;
+    case Opcode.VSHUFFLE: return `VSHUFFLE ${xd}, ${xs}`;
+    case Opcode.VUNPCKH: return `VUNPCKH ${xd}, ${xs}`;
+    case Opcode.VUNPCKL: return `VUNPCKL ${xd}, ${xs}`;
+    case Opcode.VMOVMSK: return `VMOVMSK ${rd}, ${xs}`;
+    case Opcode.VMOV: return `VMOV ${xd}, ${xs}`;
+    case Opcode.VMOVHL: return `VMOVHL ${xd}, ${xs}`;
+    case Opcode.VMOVLH: return `VMOVLH ${xd}, ${xs}`;
+    case Opcode.VCMPEQ: return `VCMPEQ ${xd}, ${xs}`;
+    case Opcode.VCMPLT: return `VCMPLT ${xd}, ${xs}`;
+    case Opcode.VCMPLE: return `VCMPLE ${xd}, ${xs}`;
+    case Opcode.VABS: return `VABS ${xd}`;
+    case Opcode.VNEG: return `VNEG ${xd}`;
+    case Opcode.VSQRT: return `VSQRT ${xd}`;
+    case Opcode.VRSQRT: return `VRSQRT ${xd}`;
+    case Opcode.VRCPPS: return `VRCPPS ${xd}`;
+    case Opcode.VEXTRACT: return `VEXTRACT ${rd}, ${xs}`;
+    case Opcode.VINSERT: return `VINSERT ${xd}, ${rs}`;
+    case Opcode.VBLEND: return `VBLEND ${xd}, ${xs}`;
+    case Opcode.VPERM: return `VPERM ${xd}, ${xs}`;
+    case Opcode.VSHL: return `VSHL ${xd}, ${xs}`;
+    case Opcode.VSHR: return `VSHR ${xd}, ${xs}`;
+    case Opcode.VROL: return `VROL ${xd}, ${xs}`;
+    case Opcode.VROR: return `VROR ${xd}, ${xs}`;
+    case Opcode.VPOPCNT: return `VPOPCNT ${xd}`;
+    case Opcode.VBSWAP: return `VBSWAP ${xd}`;
+    // Extra flow & memory
+    case Opcode.JGE: return `JGE ${addrHex}`;
+    case Opcode.JLE: return `JLE ${addrHex}`;
+    case Opcode.JG: return `JG ${addrHex}`;
+    case Opcode.CALL: return `CALL ${addrHex}`;
+    case Opcode.RET: return 'RET';
+    case Opcode.PUSH: return `PUSH ${rs}`;
+    case Opcode.POP: return `POP ${rd}`;
+    case Opcode.CMOVE: return `CMOVE ${rd}, ${rs}`;
+    case Opcode.CMOVNE: return `CMOVNE ${rd}, ${rs}`;
+    case Opcode.CMOVGE: return `CMOVGE ${rd}, ${rs}`;
+    case Opcode.CMOVLE: return `CMOVLE ${rd}, ${rs}`;
+    case Opcode.CMOVG: return `CMOVG ${rd}, ${rs}`;
+    // Extra ALU
+    case Opcode.IMUL: return `IMUL ${rd}, ${rs}`;
+    case Opcode.SAL: return `SAL ${rd}, #${inst.imm & 7}`;
+    case Opcode.SAR: return `SAR ${rd}, #${inst.imm & 7}`;
+    case Opcode.SETC: return `SETC ${rd}`;
     default: return 'NOP';
   }
 }
@@ -698,6 +1255,1062 @@ export function stepSingleInstruction(
       }
       break;
     }
+    // === MMX SIMD Integer Operations ===
+    case Opcode.PADDSB: { // Parallel add signed bytes with saturation
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane], b = vm.xmm[xs + lane];
+        // Simulate byte-level saturation: add and clamp to 16-bit
+        let r = a + b;
+        if (r > 32767) r = 32767; else if (r < -32768) r = -32768;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PADDSW: { // Parallel add signed words with saturation
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane], b = vm.xmm[xs + lane];
+        let r = a + b;
+        if (r > 32767) r = 32767; else if (r < -32768) r = -32768;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PADDUSB: { // Parallel add unsigned bytes with saturation
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = Math.max(0, vm.xmm[xd + lane]), b = Math.max(0, vm.xmm[xs + lane]);
+        let r = a + b;
+        if (r > 255) r = 255;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PADDUSW: { // Parallel add unsigned words with saturation
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = Math.max(0, vm.xmm[xd + lane]), b = Math.max(0, vm.xmm[xs + lane]);
+        let r = a + b;
+        if (r > 65535) r = 65535;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PADDD: { // Parallel add dwords
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] + vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.PADDQ: { // Parallel add qwords (2 lanes of 64-bit)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 2; lane++) {
+        vm.xmm[xd + lane * 2] = (vm.xmm[xd + lane * 2] + vm.xmm[xs + lane * 2]) | 0;
+        vm.xmm[xd + lane * 2 + 1] = (vm.xmm[xd + lane * 2 + 1] + vm.xmm[xs + lane * 2 + 1]) | 0;
+      }
+      break;
+    }
+    case Opcode.PSUBB:
+    case Opcode.PSUBW: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] - vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.PSUBSB:
+    case Opcode.PSUBSW: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let r = vm.xmm[xd + lane] - vm.xmm[xs + lane];
+        if (r > 32767) r = 32767; else if (r < -32768) r = -32768;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PSUBUSB:
+    case Opcode.PSUBUSW: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = Math.max(0, vm.xmm[xd + lane]), b = Math.max(0, vm.xmm[xs + lane]);
+        let r = a - b;
+        if (r < 0) r = 0;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PSUBD:
+    case Opcode.PSUBQ: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] - vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.PMULLW: { // Parallel multiply low words
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane] & 0xFFFF;
+        let b = vm.xmm[xs + lane] & 0xFFFF;
+        if (a > 32767) a -= 65536; if (b > 32767) b -= 65536;
+        let r = a * b;
+        r = ((r % 65536) + 65536) % 65536;
+        if (r > 32767) r -= 65536;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PMULHW: { // Parallel multiply high words (signed)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane] & 0xFFFF; if (a > 32767) a -= 65536;
+        let b = vm.xmm[xs + lane] & 0xFFFF; if (b > 32767) b -= 65536;
+        let r = (a * b) / 65536 | 0;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PMULHWS: { // Parallel multiply high words with rounding
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane] & 0xFFFF; if (a > 32767) a -= 65536;
+        let b = vm.xmm[xs + lane] & 0xFFFF; if (b > 32767) b -= 65536;
+        let r = Math.round(a * b / 65536);
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PMULUDQ: { // Unsigned doubleword multiply (high 32-bit)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane] >>> 0;
+        let b = vm.xmm[xs + lane] >>> 0;
+        let r = Math.floor((a * b) / 4294967296) >>> 0;
+        vm.xmm[xd + lane] = r;
+      }
+      break;
+    }
+    case Opcode.PSLLW: { // Parallel shift left word
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 15;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane] & 0xFFFF;
+        vm.xmm[xd + lane] = (a << sh) & 0xFFFF;
+      }
+      break;
+    }
+    case Opcode.PSLLD: { // Parallel shift left dword
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 31;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] << sh) | 0;
+      }
+      break;
+    }
+    case Opcode.PSLLQ: { // Parallel shift left qword
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 63;
+      for (let lane = 0; lane < 2; lane++) {
+        let lo = BigInt(vm.xmm[xd + lane * 2]);
+        let hi = BigInt(vm.xmm[xd + lane * 2 + 1]);
+        let q = (hi << 32n) | (lo & 0xFFFFFFFFn);
+        q = (q << BigInt(sh)) & 0xFFFFFFFFFFFFFFFFn;
+        vm.xmm[xd + lane * 2] = Number(q & 0xFFFFFFFFn);
+        vm.xmm[xd + lane * 2 + 1] = Number(q >> 32n);
+      }
+      break;
+    }
+    case Opcode.PSRLW: { // Parallel shift right word
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 15;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] >>> sh) & 0xFFFF;
+      }
+      break;
+    }
+    case Opcode.PSRLD: { // Parallel shift right dword
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 31;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] >>> sh;
+      }
+      break;
+    }
+    case Opcode.PSRLQ: { // Parallel shift right qword
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 63;
+      for (let lane = 0; lane < 2; lane++) {
+        let lo = BigInt(vm.xmm[xd + lane * 2] >>> 0);
+        let hi = BigInt(vm.xmm[xd + lane * 2 + 1] >>> 0);
+        let q = (hi << 32n) | lo;
+        q = q >> BigInt(sh);
+        vm.xmm[xd + lane * 2] = Number(q & 0xFFFFFFFFn);
+        vm.xmm[xd + lane * 2 + 1] = Number(q >> 32n);
+      }
+      break;
+    }
+    case Opcode.PSRAW: { // Parallel arithmetic shift right word
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 15;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane] & 0xFFFF;
+        if (a & 0x8000) a = -((~a + 1) & 0xFFFF);
+        a = (a >> sh) & 0xFFFF;
+        if (a < 0) a |= 0xFFFF;
+        vm.xmm[xd + lane] = a;
+      }
+      break;
+    }
+    case Opcode.PSRAD: { // Parallel arithmetic shift right dword
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 31;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] >> sh;
+      }
+      break;
+    }
+    case Opcode.PCMPEQB:
+    case Opcode.PCMPEQW:
+    case Opcode.PCMPEQD: { // Parallel compare equal
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] === vm.xmm[xs + lane] ? -1 : 0;
+      }
+      break;
+    }
+    case Opcode.PACKSSWB: { // Pack words to signed bytes
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane], b = vm.xmm[xs + lane];
+        let ab = Math.max(-128, Math.min(127, a));
+        let bb = Math.max(-128, Math.min(127, b));
+        vm.xmm[xd + lane] = (bb << 8) | ab;
+      }
+      break;
+    }
+    case Opcode.PACKUSWB: { // Pack words to unsigned bytes
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = Math.max(0, Math.min(255, vm.xmm[xd + lane]));
+        let b = Math.max(0, Math.min(255, vm.xmm[xs + lane]));
+        vm.xmm[xd + lane] = (b << 8) | a;
+      }
+      break;
+    }
+    case Opcode.PACKSSDW: { // Pack dwords to signed words
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = Math.max(-32768, Math.min(32767, vm.xmm[xd + lane]));
+        let b = Math.max(-32768, Math.min(32767, vm.xmm[xs + lane]));
+        vm.xmm[xd + lane] = (b << 16) | (a & 0xFFFF);
+      }
+      break;
+    }
+    case Opcode.PUNPCKHBW:
+    case Opcode.PUNPCKLHBW: { // Unpack bytes to words
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const high = inst.opcode === Opcode.PUNPCKHBW;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane], b = vm.xmm[xs + lane];
+        let aLo = a & 0xFF, aHi = (a >> 8) & 0xFF;
+        let bLo = b & 0xFF, bHi = (b >> 8) & 0xFF;
+        vm.xmm[xd + lane] = high ? (bHi << 8 | aHi) : (bLo << 8 | aLo);
+      }
+      break;
+    }
+    case Opcode.PUNPCKHWD:
+    case Opcode.PUNPCKLWD: { // Unpack words to dwords
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const high = inst.opcode === Opcode.PUNPCKHWD;
+      for (let lane = 0; lane < 4; lane++) {
+        let a = vm.xmm[xd + lane], b = vm.xmm[xs + lane];
+        let aLo = a & 0xFFFF, aHi = (a >> 16) & 0xFFFF;
+        let bLo = b & 0xFFFF, bHi = (b >> 16) & 0xFFFF;
+        vm.xmm[xd + lane] = high ? (bHi << 16 | aHi) : (bLo << 16 | aLo);
+      }
+      break;
+    }
+    case Opcode.PUNPCKHDQ:
+    case Opcode.PUNPCKLDQ: { // Unpack dwords to qwords
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const high = inst.opcode === Opcode.PUNPCKHDQ;
+      for (let lane = 0; lane < 2; lane++) {
+        let a = vm.xmm[xd + lane * 2], b = vm.xmm[xs + lane * 2];
+        vm.xmm[xd + lane * 2] = high ? b : a;
+        vm.xmm[xd + lane * 2 + 1] = high ? a : b;
+      }
+      break;
+    }
+    case Opcode.PAND: { // Parallel AND
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] & vm.xmm[xs + lane];
+      }
+      break;
+    }
+    case Opcode.PANDN: { // Parallel AND NOT
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (~vm.xmm[xd + lane]) & vm.xmm[xs + lane];
+      }
+      break;
+    }
+    case Opcode.POR: { // Parallel OR
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] | vm.xmm[xs + lane];
+      }
+      break;
+    }
+    case Opcode.PXOR: { // Parallel XOR
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] ^ vm.xmm[xs + lane];
+      }
+      break;
+    }
+    case Opcode.MOVQ: { // Move 64-bit between vectors
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs];
+      vm.xmm[xd + 1] = vm.xmm[xs + 1];
+      break;
+    }
+    case Opcode.EMMS: { // Empty MMX state
+      for (let i = 0; i < vm.xmm.length; i++) vm.xmm[i] = 0;
+      break;
+    }
+    // === SSE Floating Point Operations ===
+    case Opcode.ADDSS: { // Add scalar single-precision (lane 0)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xd] + vm.xmm[xs]) | 0;
+      break;
+    }
+    case Opcode.ADDPS: { // Add packed single-precision
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] + vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.MULSS: { // Multiply scalar
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xd] * vm.xmm[xs]) | 0;
+      break;
+    }
+    case Opcode.MULPS: { // Multiply packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] * vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.SUBSS: { // Subtract scalar
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xd] - vm.xmm[xs]) | 0;
+      break;
+    }
+    case Opcode.SUBPS: { // Subtract packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = (vm.xmm[xd + lane] - vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.DIVSS: { // Divide scalar
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      if (vm.xmm[xs] !== 0) vm.xmm[xd] = (vm.xmm[xd] / vm.xmm[xs]) | 0;
+      break;
+    }
+    case Opcode.DIVPS: { // Divide packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        if (vm.xmm[xs + lane] !== 0) vm.xmm[xd + lane] = (vm.xmm[xd + lane] / vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.MINSS: { // Minimum scalar
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = Math.min(vm.xmm[xd], vm.xmm[xs]);
+      break;
+    }
+    case Opcode.MINPS: { // Minimum packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Math.min(vm.xmm[xd + lane], vm.xmm[xs + lane]);
+      }
+      break;
+    }
+    case Opcode.MAXSS: { // Maximum scalar
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = Math.max(vm.xmm[xd], vm.xmm[xs]);
+      break;
+    }
+    case Opcode.MAXPS: { // Maximum packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Math.max(vm.xmm[xd + lane], vm.xmm[xs + lane]);
+      }
+      break;
+    }
+    case Opcode.SQRTSS: { // Square root scalar
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = Math.sqrt(Math.abs(vm.xmm[xs])) | 0;
+      break;
+    }
+    case Opcode.SQRTPS: { // Square root packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Math.sqrt(Math.abs(vm.xmm[xs + lane])) | 0;
+      }
+      break;
+    }
+    case Opcode.CMPSS: { // Compare scalar
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xd] === vm.xmm[xs] ? -1 : 0;
+      break;
+    }
+    case Opcode.CMPPS: { // Compare packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] === vm.xmm[xs + lane] ? -1 : 0;
+      }
+      break;
+    }
+    case Opcode.MOVSS:
+    case Opcode.MOVPS:
+    case Opcode.MOVAPS:
+    case Opcode.MOVUPS: { // Move packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xs + lane];
+      }
+      break;
+    }
+    case Opcode.MOVHLPS: { // Move high to low
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs + 2];
+      vm.xmm[xd + 1] = vm.xmm[xs + 3];
+      break;
+    }
+    case Opcode.MOVLHPS: { // Move low to high
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd + 2] = vm.xmm[xs];
+      vm.xmm[xd + 3] = vm.xmm[xs + 1];
+      break;
+    }
+    case Opcode.MOVMSKPS: { // Extract sign mask
+      const xs = (inst.src & 3) * 4;
+      let mask = 0;
+      for (let lane = 0; lane < 4; lane++) {
+        if (vm.xmm[xs + lane] < 0) mask |= (1 << lane);
+      }
+      vm.regs[inst.dst] = maskSigned(BigInt(mask), bitWidth);
+      break;
+    }
+    case Opcode.SHUFPS: { // Shuffle packed
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const imm = inst.imm & 0xF;
+      vm.xmm[xd] = vm.xmm[xs + (imm & 3)];
+      vm.xmm[xd + 1] = vm.xmm[xs + ((imm >> 2) & 3)];
+      vm.xmm[xd + 2] = vm.xmm[xs + ((imm >> 4) & 3) + 2];
+      vm.xmm[xd + 3] = vm.xmm[xs + ((imm >> 6) & 3) + 2];
+      break;
+    }
+    case Opcode.UNPCKLPS: { // Unpack low
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd + 3] = vm.xmm[xs + 1];
+      vm.xmm[xd + 2] = vm.xmm[xs];
+      break;
+    }
+    case Opcode.UNPCKHPS: { // Unpack high
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs + 2];
+      vm.xmm[xd + 1] = vm.xmm[xs + 3];
+      break;
+    }
+    case Opcode.CVTSS2SI: { // Convert scalar FP to integer
+      const xs = (inst.src & 3) * 4;
+      vm.regs[inst.dst] = maskSigned(BigInt(vm.xmm[xs]), bitWidth);
+      break;
+    }
+    case Opcode.CVTSI2SS: { // Convert integer to scalar FP
+      const xd = (inst.dst & 3) * 4;
+      vm.xmm[xd] = Number(BigInt.asIntN(32, rsVal));
+      break;
+    }
+    case Opcode.CVTSS2SD:
+    case Opcode.CVTSD2SS: { // Convert precision (no-op in integer VM)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs];
+      break;
+    }
+    // === SSE2 Operations ===
+    case Opcode.MOVDQA:
+    case Opcode.MOVDQU: { // Move aligned/unaligned 128-bit
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xs + lane];
+      break;
+    }
+    case Opcode.MOVDDUP: { // Move and duplicate
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs]; vm.xmm[xd + 1] = vm.xmm[xs + 1];
+      vm.xmm[xd + 2] = vm.xmm[xs]; vm.xmm[xd + 3] = vm.xmm[xs + 1];
+      break;
+    }
+    case Opcode.MOVSHDUP: { // Move high duplicate
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs + 1]; vm.xmm[xd + 1] = vm.xmm[xs + 1];
+      vm.xmm[xd + 2] = vm.xmm[xs + 3]; vm.xmm[xd + 3] = vm.xmm[xs + 3];
+      break;
+    }
+    case Opcode.MOVSLDUP: { // Move low duplicate
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs]; vm.xmm[xd + 1] = vm.xmm[xs];
+      vm.xmm[xd + 2] = vm.xmm[xs + 2]; vm.xmm[xd + 3] = vm.xmm[xs + 2];
+      break;
+    }
+    case Opcode.PAVGB: { // Average bytes
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = ((vm.xmm[xd + lane] + vm.xmm[xs + lane]) / 2) | 0;
+      }
+      break;
+    }
+    case Opcode.PAVGW: { // Average words
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = ((vm.xmm[xd + lane] + vm.xmm[xs + lane] + 1) / 2) | 0;
+      }
+      break;
+    }
+    case Opcode.PMINSW: { // Minimum signed words
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Math.min(vm.xmm[xd + lane], vm.xmm[xs + lane]);
+      }
+      break;
+    }
+    case Opcode.PMAXSW: { // Maximum signed words
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Math.max(vm.xmm[xd + lane], vm.xmm[xs + lane]);
+      }
+      break;
+    }
+    case Opcode.PMINUB: { // Minimum unsigned bytes
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Math.min(vm.xmm[xd + lane] & 0xFF, vm.xmm[xs + lane] & 0xFF);
+      }
+      break;
+    }
+    case Opcode.PMAXUB: { // Maximum unsigned bytes
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Math.max(vm.xmm[xd + lane] & 0xFF, vm.xmm[xs + lane] & 0xFF);
+      }
+      break;
+    }
+    case Opcode.MOVMSKDQ: { // Extract quadword sign mask
+      const xs = (inst.src & 3) * 4;
+      let mask = 0;
+      for (let lane = 0; lane < 4; lane++) {
+        if (vm.xmm[xs + lane] < 0) mask |= (1 << lane);
+      }
+      vm.regs[inst.dst] = maskSigned(BigInt(mask), bitWidth);
+      break;
+    }
+    case Opcode.CVTDQ2PS: { // Convert dwords to FP (identity in integer VM)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xs + lane];
+      break;
+    }
+    case Opcode.CVTPS2DQ: { // Convert FP to dwords (identity in integer VM)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xs + lane];
+      break;
+    }
+    case Opcode.ADDPD:
+    case Opcode.MULPD:
+    case Opcode.SUBPD:
+    case Opcode.DIVPD:
+    case Opcode.SQRTPD:
+    case Opcode.CMPPD:
+    case Opcode.MOVAPD:
+    case Opcode.MOVUPD: { // Double precision ops (same as single in integer VM)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        switch (inst.opcode) {
+          case Opcode.ADDPD: vm.xmm[xd + lane] = (vm.xmm[xd + lane] + vm.xmm[xs + lane]) | 0; break;
+          case Opcode.MULPD: vm.xmm[xd + lane] = (vm.xmm[xd + lane] * vm.xmm[xs + lane]) | 0; break;
+          case Opcode.SUBPD: vm.xmm[xd + lane] = (vm.xmm[xd + lane] - vm.xmm[xs + lane]) | 0; break;
+          case Opcode.DIVPD: if (vm.xmm[xs + lane] !== 0) vm.xmm[xd + lane] = (vm.xmm[xd + lane] / vm.xmm[xs + lane]) | 0; break;
+          case Opcode.SQRTPD: vm.xmm[xd + lane] = Math.sqrt(Math.abs(vm.xmm[xs + lane])) | 0; break;
+          case Opcode.CMPPD: vm.xmm[xd + lane] = vm.xmm[xd + lane] === vm.xmm[xs + lane] ? -1 : 0; break;
+          default: vm.xmm[xd + lane] = vm.xmm[xs + lane]; break;
+        }
+      }
+      break;
+    }
+    case Opcode.CVTSI2SD: { // Convert integer to scalar double
+      const xd = (inst.dst & 3) * 4;
+      vm.xmm[xd] = Number(BigInt.asIntN(32, rsVal));
+      break;
+    }
+    case Opcode.CVTSD2SI: { // Convert scalar double to integer
+      const xs = (inst.src & 3) * 4;
+      vm.regs[inst.dst] = maskSigned(BigInt(vm.xmm[xs]), bitWidth);
+      break;
+    }
+    // === SSE3 Operations ===
+    case Opcode.ADDSUBPS: { // Add/subtract alternating
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xd] + vm.xmm[xs]) | 0;
+      vm.xmm[xd + 1] = (vm.xmm[xd + 1] - vm.xmm[xs + 1]) | 0;
+      vm.xmm[xd + 2] = (vm.xmm[xd + 2] + vm.xmm[xs + 2]) | 0;
+      vm.xmm[xd + 3] = (vm.xmm[xd + 3] - vm.xmm[xs + 3]) | 0;
+      break;
+    }
+    case Opcode.ADDSUBPD: { // Add/subtract alternating (double)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xd] + vm.xmm[xs]) | 0;
+      vm.xmm[xd + 1] = (vm.xmm[xd + 1] - vm.xmm[xs + 1]) | 0;
+      break;
+    }
+    case Opcode.HADDPS: { // Horizontal add
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xs] + vm.xmm[xs + 1]) | 0;
+      vm.xmm[xd + 1] = (vm.xmm[xs + 2] + vm.xmm[xs + 3]) | 0;
+      vm.xmm[xd + 2] = (vm.xmm[xd + 2] + vm.xmm[xd + 3]) | 0;
+      vm.xmm[xd + 3] = vm.xmm[xd + 2];
+      break;
+    }
+    case Opcode.HSUBPS: { // Horizontal subtract
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xs] - vm.xmm[xs + 1]) | 0;
+      vm.xmm[xd + 1] = (vm.xmm[xs + 2] - vm.xmm[xs + 3]) | 0;
+      vm.xmm[xd + 2] = (vm.xmm[xd + 2] - vm.xmm[xd + 3]) | 0;
+      vm.xmm[xd + 3] = vm.xmm[xd + 2];
+      break;
+    }
+    case Opcode.HADDPD:
+    case Opcode.HSUBPD: { // Horizontal add/sub double
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      if (inst.opcode === Opcode.HADDPD) {
+        vm.xmm[xd] = (vm.xmm[xs] + vm.xmm[xs + 1]) | 0;
+        vm.xmm[xd + 1] = (vm.xmm[xd + 1] + vm.xmm[xd + 2]) | 0;
+      } else {
+        vm.xmm[xd] = (vm.xmm[xs] - vm.xmm[xs + 1]) | 0;
+        vm.xmm[xd + 1] = (vm.xmm[xd + 1] - vm.xmm[xd + 2]) | 0;
+      }
+      break;
+    }
+    case Opcode.LDDQU: { // Load unaligned (same as VLOAD)
+      const xd = (inst.dst & 3) * 4;
+      const base = Number(rsVal & BigInt(RAM_WORDS - 1));
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = Number(BigInt.asIntN(32, vm.ram[(base + lane) & (RAM_WORDS - 1)]));
+      }
+      break;
+    }
+    case Opcode.MOVNTDQ: { // Non-temporal store (same as VSTORE)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const base = Number(rdVal & BigInt(RAM_WORDS - 1));
+      for (let lane = 0; lane < 4; lane++) {
+        vm.ram[(base + lane) & (RAM_WORDS - 1)] = BigInt(vm.xmm[xs + lane]);
+      }
+      break;
+    }
+    case Opcode.FADDSS: { // Fused add (FMA-like: Rd + Rs * imm)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xd] + vm.xmm[xs] * (inst.imm || 1)) | 0;
+      break;
+    }
+    case Opcode.FMULSS: { // Fused multiply (FMA-like: Rd * Rs + imm)
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = (vm.xmm[xd] * vm.xmm[xs] + inst.imm) | 0;
+      break;
+    }
+    case Opcode.MONITOR: { // Set monitor (no-op in VM)
+      break;
+    }
+    case Opcode.MWAIT: { // Monitor wait (no-op in VM)
+      break;
+    }
+    // === Extra SIMD Operations ===
+    case Opcode.VSUB: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = (vm.xmm[xd + lane] - vm.xmm[xs + lane]) | 0;
+      break;
+    }
+    case Opcode.VMUL: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = (vm.xmm[xd + lane] * vm.xmm[xs + lane]) | 0;
+      break;
+    }
+    case Opcode.VDIV: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        if (vm.xmm[xs + lane] !== 0) vm.xmm[xd + lane] = (vm.xmm[xd + lane] / vm.xmm[xs + lane]) | 0;
+      }
+      break;
+    }
+    case Opcode.VMIN: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = Math.min(vm.xmm[xd + lane], vm.xmm[xs + lane]);
+      break;
+    }
+    case Opcode.VMAX: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = Math.max(vm.xmm[xd + lane], vm.xmm[xs + lane]);
+      break;
+    }
+    case Opcode.VAND: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xd + lane] & vm.xmm[xs + lane];
+      break;
+    }
+    case Opcode.VOR: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xd + lane] | vm.xmm[xs + lane];
+      break;
+    }
+    case Opcode.VSHUFFLE: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const imm = inst.imm & 0xF;
+      vm.xmm[xd] = vm.xmm[xs + (imm & 3)];
+      vm.xmm[xd + 1] = vm.xmm[xs + ((imm >> 2) & 3)];
+      vm.xmm[xd + 2] = vm.xmm[xs + ((imm >> 4) & 3)];
+      vm.xmm[xd + 3] = vm.xmm[xs + ((imm >> 6) & 3)];
+      break;
+    }
+    case Opcode.VUNPCKH: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs + 2]; vm.xmm[xd + 1] = vm.xmm[xs + 3];
+      break;
+    }
+    case Opcode.VUNPCKL: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd + 2] = vm.xmm[xs]; vm.xmm[xd + 3] = vm.xmm[xs + 1];
+      break;
+    }
+    case Opcode.VMOVMSK: {
+      const xs = (inst.src & 3) * 4;
+      let mask = 0;
+      for (let lane = 0; lane < 4; lane++) if (vm.xmm[xs + lane] < 0) mask |= (1 << lane);
+      vm.regs[inst.dst] = maskSigned(BigInt(mask), bitWidth);
+      break;
+    }
+    case Opcode.VMOV: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xs + lane];
+      break;
+    }
+    case Opcode.VMOVHL: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd] = vm.xmm[xs + 2]; vm.xmm[xd + 1] = vm.xmm[xs + 3];
+      break;
+    }
+    case Opcode.VMOVLH: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      vm.xmm[xd + 2] = vm.xmm[xs]; vm.xmm[xd + 3] = vm.xmm[xs + 1];
+      break;
+    }
+    case Opcode.VCMPEQ: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xd + lane] === vm.xmm[xs + lane] ? -1 : 0;
+      break;
+    }
+    case Opcode.VCMPLT: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xd + lane] < vm.xmm[xs + lane] ? -1 : 0;
+      break;
+    }
+    case Opcode.VCMPLE: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xd + lane] <= vm.xmm[xs + lane] ? -1 : 0;
+      break;
+    }
+    case Opcode.VABS: {
+      const xd = (inst.dst & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = Math.abs(vm.xmm[xd + lane]);
+      break;
+    }
+    case Opcode.VNEG: {
+      const xd = (inst.dst & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = -vm.xmm[xd + lane];
+      break;
+    }
+    case Opcode.VSQRT: {
+      const xd = (inst.dst & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = Math.sqrt(Math.abs(vm.xmm[xd + lane])) | 0;
+      break;
+    }
+    case Opcode.VRSQRT: {
+      const xd = (inst.dst & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] !== 0 ? (1 / Math.sqrt(Math.abs(vm.xmm[xd + lane]))) | 0 : 0;
+      }
+      break;
+    }
+    case Opcode.VRCPPS: {
+      const xd = (inst.dst & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        vm.xmm[xd + lane] = vm.xmm[xd + lane] !== 0 ? (1 / vm.xmm[xd + lane]) | 0 : 0;
+      }
+      break;
+    }
+    case Opcode.VEXTRACT: {
+      const xs = (inst.src & 3) * 4;
+      const lane = inst.imm & 3;
+      vm.regs[inst.dst] = maskSigned(BigInt(vm.xmm[xs + lane]), bitWidth);
+      break;
+    }
+    case Opcode.VINSERT: {
+      const xd = (inst.dst & 3) * 4;
+      const lane = inst.imm & 3;
+      vm.xmm[xd + lane] = Number(BigInt.asIntN(32, rsVal));
+      break;
+    }
+    case Opcode.VBLEND: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const mask = inst.imm & 0xF;
+      for (let lane = 0; lane < 4; lane++) {
+        if (mask & (1 << lane)) vm.xmm[xd + lane] = vm.xmm[xs + lane];
+      }
+      break;
+    }
+    case Opcode.VPERM: {
+      const xd = (inst.dst & 3) * 4;
+      const xs = (inst.src & 3) * 4;
+      const imm = inst.imm & 0xF;
+      vm.xmm[xd] = vm.xmm[xs + (imm & 3)];
+      vm.xmm[xd + 1] = vm.xmm[xs + ((imm >> 2) & 3)];
+      vm.xmm[xd + 2] = vm.xmm[xs + ((imm >> 4) & 3)];
+      vm.xmm[xd + 3] = vm.xmm[xs + ((imm >> 6) & 3)];
+      break;
+    }
+    case Opcode.VSHL: {
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 31;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = (vm.xmm[xd + lane] << sh) | 0;
+      break;
+    }
+    case Opcode.VSHR: {
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 31;
+      for (let lane = 0; lane < 4; lane++) vm.xmm[xd + lane] = vm.xmm[xd + lane] >>> sh;
+      break;
+    }
+    case Opcode.VROL: {
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 31;
+      for (let lane = 0; lane < 4; lane++) {
+        let v = vm.xmm[xd + lane] >>> 0;
+        vm.xmm[xd + lane] = ((v << sh) | (v >> (32 - sh))) | 0;
+      }
+      break;
+    }
+    case Opcode.VROR: {
+      const xd = (inst.dst & 3) * 4;
+      const sh = inst.imm & 31;
+      for (let lane = 0; lane < 4; lane++) {
+        let v = vm.xmm[xd + lane] >>> 0;
+        vm.xmm[xd + lane] = ((v >> sh) | (v << (32 - sh))) | 0;
+      }
+      break;
+    }
+    case Opcode.VPOPCNT: {
+      const xd = (inst.dst & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let v = vm.xmm[xd + lane] >>> 0;
+        let c = 0;
+        while (v) { c += v & 1; v >>= 1; }
+        vm.xmm[xd + lane] = c;
+      }
+      break;
+    }
+    case Opcode.VBSWAP: {
+      const xd = (inst.dst & 3) * 4;
+      for (let lane = 0; lane < 4; lane++) {
+        let v = vm.xmm[xd + lane] >>> 0;
+        vm.xmm[xd + lane] = ((v >> 24) | ((v >> 8) & 0xFF00) | ((v << 8) & 0xFF0000) | (v << 24)) | 0;
+      }
+      break;
+    }
+    // === Extra Flow & Memory ===
+    case Opcode.JGE: {
+      if (!vm.cf || vm.sf || vm.zf) {
+        vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
+        jumped = true;
+      }
+      break;
+    }
+    case Opcode.JLE: {
+      if (vm.cf !== vm.sf || vm.zf) {
+        vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
+        jumped = true;
+      }
+      break;
+    }
+    case Opcode.JG: {
+      if (!vm.zf && vm.cf === vm.sf) {
+        vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
+        jumped = true;
+      }
+      break;
+    }
+    case Opcode.CALL: {
+      // Push current IP onto stack (RAM)
+      const sp = Number(vm.regs[7] & BigInt(RAM_WORDS - 1));
+      vm.ram[sp] = BigInt(idx);
+      vm.regs[7] = maskSigned(BigInt((sp + 1) % RAM_WORDS), bitWidth);
+      vm.ip = ((inst.imm % PROG_LEN) + PROG_LEN) % PROG_LEN;
+      jumped = true;
+      break;
+    }
+    case Opcode.RET: {
+      // Pop IP from stack
+      const sp = Number((vm.regs[7] - 1n) & BigInt(RAM_WORDS - 1));
+      vm.regs[7] = maskSigned(BigInt(sp), bitWidth);
+      vm.ip = Number(BigInt.asUintN(32, vm.ram[sp])) % PROG_LEN;
+      jumped = true;
+      break;
+    }
+    case Opcode.PUSH: {
+      const sp = Number(vm.regs[7] & BigInt(RAM_WORDS - 1));
+      vm.ram[sp] = rsVal;
+      vm.regs[7] = maskSigned(BigInt((sp + 1) % RAM_WORDS), bitWidth);
+      break;
+    }
+    case Opcode.POP: {
+      const sp = Number((vm.regs[7] - 1n) & BigInt(RAM_WORDS - 1));
+      vm.regs[7] = maskSigned(BigInt(sp), bitWidth);
+      vm.regs[inst.dst] = maskSigned(vm.ram[sp], bitWidth);
+      break;
+    }
+    case Opcode.CMOVE:
+    case Opcode.CMOVNE:
+    case Opcode.CMOVGE:
+    case Opcode.CMOVLE:
+    case Opcode.CMOVG: {
+      let cond = false;
+      switch (inst.opcode) {
+        case Opcode.CMOVE: cond = vm.zf; break;
+        case Opcode.CMOVNE: cond = !vm.zf; break;
+        case Opcode.CMOVGE: cond = !vm.cf || vm.sf || vm.zf; break;
+        case Opcode.CMOVLE: cond = vm.cf !== vm.sf || vm.zf; break;
+        case Opcode.CMOVG: cond = !vm.zf && vm.cf === vm.sf; break;
+      }
+      if (cond) vm.regs[inst.dst] = maskSigned(rsVal, bitWidth);
+      break;
+    }
+    // === Extra ALU ===
+    case Opcode.IMUL: {
+      vm.regs[inst.dst] = maskSigned(rdVal * rsVal, bitWidth);
+      break;
+    }
+    case Opcode.SAL: {
+      vm.regs[inst.dst] = maskSigned(rdVal << BigInt(inst.imm & 7), bitWidth);
+      break;
+    }
+    case Opcode.SAR: {
+      vm.regs[inst.dst] = maskSigned(rdVal >> BigInt(inst.imm & 7), bitWidth);
+      break;
+    }
+    case Opcode.SETC: {
+      vm.regs[inst.dst] = maskSigned(vm.cf ? 1n : 0n, bitWidth);
+      break;
+    }
   }
 
   if (!jumped) {
@@ -872,6 +2485,37 @@ export function createStarterGenome(taskId: TaskId): Uint8Array {
     encodeInstruction(g, 19, Opcode.ACT, 0, 5, 0);    // ACT R5
     // Rest NOP
     for (let i = 20; i < PROG_LEN; i++) {
+      encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
+    }
+  } else if (taskId === 'ecosystem') {
+    // Ecosysteem: navigeer naar het huisje (links-boven zone 0-7, 0-7) als fallback.
+    // P4=energy, P5=tick, P6=zone-ID, P7=huisje-richting (4-bit encoding)
+    // P7 encoding: bit3=DX<0 (8), bit2=DX>0 (4), bit1=DY<0 (2), bit0=DY>0 (1)
+    // Decode P7 naar actie: 0=Noord, 1=Oost, 2=Zuid, 3=West
+    // Strategie: lees P7, check DX eerst (bit 2/3), dan DY (bit 0/1)
+    // Als DX != 0: beweeg X-richting (Oost=1 als DX>0, West=3 als DX<0)
+    // Als DX == 0: beweeg Y-richting (Noord=0 als DY<0, Zuid=2 als DY>0)
+    encodeInstruction(g, 0, Opcode.SENSE, 0, 7, 0);   // R0 = P7 (houseDir encoding)
+    encodeInstruction(g, 1, Opcode.MOVI, 1, 0, 4);     // R1 = 4 (mask voor DX>0 bit)
+    encodeInstruction(g, 2, Opcode.AND, 1, 0, 1);      // R1 = R0 & 4 (DX>0?)
+    encodeInstruction(g, 3, Opcode.MOVI, 2, 0, 8);     // R2 = 8 (mask voor DX<0 bit)
+    encodeInstruction(g, 4, Opcode.AND, 2, 0, 2);      // R2 = R0 & 8 (DX<0?)
+    encodeInstruction(g, 5, Opcode.CMP, 1, 2, 0);      // CMP R1, R2 (DX>0 vs DX<0)
+    encodeInstruction(g, 6, Opcode.JLT, 0, 0, 10);     // als DX>0 < DX<0 → DX<0, ga West (@10)
+    encodeInstruction(g, 7, Opcode.JNZ, 0, 0, 8);      // als R1 != 0 → DX>0, ga Oost (@8)
+    encodeInstruction(g, 8, Opcode.JMP, 0, 0, 12);     // DX==0, check Y (@12)
+    encodeInstruction(g, 9, Opcode.MOVI, 3, 0, 1);     // R3 = 1 (Oost)
+    encodeInstruction(g, 10, Opcode.JMP, 0, 0, 14);    // naar ACT (@14)
+    encodeInstruction(g, 11, Opcode.MOVI, 3, 0, 3);    // R3 = 3 (West)
+    encodeInstruction(g, 12, Opcode.MOVI, 1, 0, 1);    // R1 = 1 (mask voor DY>0 bit)
+    encodeInstruction(g, 13, Opcode.AND, 1, 0, 1);     // R1 = R0 & 1 (DY>0?)
+    encodeInstruction(g, 14, Opcode.JNZ, 0, 0, 16);    // als DY>0 → Zuid (@16)
+    encodeInstruction(g, 15, Opcode.MOVI, 3, 0, 0);    // R3 = 0 (Noord - fallback)
+    encodeInstruction(g, 16, Opcode.JMP, 0, 0, 17);    // naar ACT (@17)
+    encodeInstruction(g, 17, Opcode.MOVI, 3, 0, 2);    // R3 = 2 (Zuid)
+    encodeInstruction(g, 18, Opcode.ACT, 0, 3, 0);     // ACT R3 (beweeg naar huisje)
+    // Rest NOP — evolutie vult de zone-specifieke logica in
+    for (let i = 19; i < PROG_LEN; i++) {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else if (taskId === 'bitstream') {
@@ -1837,7 +3481,7 @@ export function evolveGeneration(
   coAgent: Agent | null;
 } {
   const taskOffset =
-    taskId === 'homeostasis' ? 0 : taskId === 'arena' ? 29 : taskId === 'bitstream' ? 53 : 71;
+    taskId === 'homeostasis' ? 0 : taskId === 'arena' ? 29 : taskId === 'bitstream' ? 53 : taskId === 'hardware' ? 71 : 95;
   // Epoch rotates smoothly every 8 generations so improvements consolidate across multi-regime anchors + unseen seeds
   const epochSeedA = 5100 + Math.floor(generation / 8) * 197 + taskOffset;
   const epochSeedB = 6101 + Math.floor(generation / 8) * 313 + taskOffset;
@@ -1949,8 +3593,8 @@ export function evolveGeneration(
     }
   }
 
-  // Versie met forceSense voor arena: 50% random genomes krijgen SENSE
-  const forceSense = taskId === 'arena';
+  // Versie met forceSense voor arena en ecosystem: 50% random genomes krijgen SENSE
+  const forceSense = taskId === 'arena' || taskId === 'ecosystem';
   for (let i = 0; i < freshImmigrants && nextPopulation.length < popSize; i++) {
     // 50% SEED_GENOME + mutatie, 50% volledig random
     if (rng() < 0.50) {
@@ -2793,7 +4437,161 @@ export function generateStandaloneTrainerC99(
     }
     return score;
 }`
-          : `static double eval_task(const uint8_t *g, uint32_t seed) {
+          : taskId === 'ecosystem'
+            ? `static double eval_task(const uint8_t *g, uint32_t seed) {
+    rng_state = seed ? seed : 1;
+    SiliciumVM vm = {0};
+    memcpy(vm.active_code, g, PROG_LEN * 4);
+    // 24x24 grid, 4 zones: 0=House(0-7,0-7), 1=Forest(16-23,0-7), 2=Puzzle(0-7,16-23), 3=Tower(16-23,16-23)
+    int ax = 12, ay = 12; // start in transition zone
+    double energy = 82.0, score = 0.0;
+    double ecoTemp = 55.0, ecoQueue = 30.0;
+    int ecoBitCurr = (int)(xorshift32() & 15), ecoBitPrev = (int)(xorshift32() & 15);
+    int ecoHwA = (int)(xorshift32() & 63), ecoHwB = (int)(xorshift32() & 31);
+    int ecoNodes[4][2]; // 4 energy nodes in forest
+    for (int i = 0; i < 4; i++) { ecoNodes[i][0] = 16 + (int)(xorshift32() % 8); ecoNodes[i][1] = (int)(xorshift32() % 8); }
+    int ecoHazards[3][2]; // 3 hazards in forest
+    for (int i = 0; i < 3; i++) { ecoHazards[i][0] = 16 + (int)(xorshift32() % 8); ecoHazards[i][1] = (int)(xorshift32() % 8); }
+    int prevZone = -1;
+
+    for (int t = 0; t < TICKS; t++) {
+        // Zone detection
+        int zone = -1;
+        if (ax >= 0 && ax <= 7 && ay >= 0 && ay <= 7) zone = 0;
+        else if (ax >= 16 && ax <= 23 && ay >= 0 && ay <= 7) zone = 1;
+        else if (ax >= 0 && ax <= 7 && ay >= 16 && ay <= 23) zone = 2;
+        else if (ax >= 16 && ax <= 23 && ay >= 16 && ay <= 23) zone = 3;
+
+        // Energy decreases per tick
+        energy -= 0.8;
+        if (energy <= 0.0) { score -= 25.0; break; }
+
+        // Ports: zone-specific P0-P3 + general P4-P7
+        int32_t ports[8];
+        int hx = 4, hy = 4; // house position
+        int dirX = hx - ax, dirY = hy - ay;
+        int houseDir = 0;
+        if (ax > hx) houseDir = 3; // West
+        else if (ax < hx) houseDir = 1; // East
+        else if (ay < hy) houseDir = 0; // North
+        else if (ay > hy) houseDir = 2; // South
+
+        if (zone == 0) {
+            // House: homeostasis sensors
+            ports[0] = (int32_t)ecoTemp; ports[1] = (int32_t)ecoQueue;
+            ports[2] = (int32_t)energy; ports[3] = (int32_t)(ecoTemp - 55.0);
+        } else if (zone == 1) {
+            // Forest: arena sensors (nearest energy node)
+            int bnd = 999, bx = ecoNodes[0][0], by = ecoNodes[0][1];
+            for (int i = 0; i < 4; i++) { int d = (ax>ecoNodes[i][0]?ax-ecoNodes[i][0]:ecoNodes[i][0]-ax)+(ay>ecoNodes[i][1]?ay-ecoNodes[i][1]:ecoNodes[i][1]-ay); if (d<bnd){bnd=d;bx=ecoNodes[i][0];by=ecoNodes[i][1];} }
+            ports[0] = bx - ax; ports[1] = by - ay;
+            int bhd = 999, bhx = ecoHazards[0][0], bhy = ecoHazards[0][1];
+            for (int i = 0; i < 3; i++) { int d = (ax>ecoHazards[i][0]?ax-ecoHazards[i][0]:ecoHazards[i][0]-ax)+(ay>ecoHazards[i][1]?ay-ecoHazards[i][1]:ecoHazards[i][1]-ay); if (d<bhd){bhd=d;bhx=ecoHazards[i][0];bhy=ecoHazards[i][1];} }
+            ports[2] = bhx - ax; ports[3] = bhy - ay;
+        } else if (zone == 2) {
+            // Puzzle: bitstream sensors
+            int hw = 0, c = ecoBitCurr; while (c) { hw += (c & 1); c >>= 1; }
+            ports[0] = ecoBitCurr; ports[1] = ecoBitPrev; ports[2] = t & 1; ports[3] = hw;
+        } else {
+            // Tower or transition: hardware sensors
+            ports[0] = ecoHwA; ports[1] = ecoHwB; ports[2] = (ecoHwA ^ ecoHwB) & 0xFF; ports[3] = 0;
+        }
+        ports[4] = (int32_t)energy; ports[5] = t & 0xFF;
+        ports[6] = zone; ports[7] = houseDir;
+
+        int acted = 0;
+        int32_t raw = vm_tick(&vm, ports, &acted);
+        int act = raw & 0x0f;
+        double zoneReward = 0;
+
+        if (zone == 0) {
+            // === HOUSE: Homeostasis (weight x0.8) ===
+            int hAct = ((act % 4) + 4) % 4;
+            int load = 4 + (int)(xorshift32() % 6) + (t % 9 == 0 ? 15 : 0);
+            if (hAct == 0) { ecoTemp -= 5.0; energy += 8.0; ecoQueue += load; }
+            else if (hAct == 1) { ecoTemp += 2.0; energy -= 3.0; ecoQueue += load - 7; }
+            else if (hAct == 2) { ecoTemp += 7.0; energy -= 7.5; ecoQueue += load - 16; }
+            else { ecoTemp -= 10.0; energy -= 4.5; ecoQueue += load - 2; }
+            ecoTemp += (32.0 - ecoTemp) * 0.04;
+            if (ecoTemp < 15.0) ecoTemp = 15.0; if (ecoTemp > 105.0) ecoTemp = 105.0;
+            if (ecoQueue < 0.0) ecoQueue = 0.0; if (ecoQueue > 100.0) ecoQueue = 100.0;
+            if (energy < 0.0) energy = 0.0; if (energy > 100.0) energy = 100.0;
+            if (ecoTemp >= 96.0) { zoneReward = -50.0; }
+            else {
+                double ts = 12.0 - ((ecoTemp > 52.0 ? ecoTemp - 52.0 : 52.0 - ecoTemp) * 0.45);
+                double qs = 10.0 - ecoQueue * 0.22;
+                zoneReward = (ts > 0 ? ts : 0) + (qs > 0 ? qs : 0) + (energy > 25.0 ? 6.0 : -8.0);
+            }
+            zoneReward *= 0.8;
+        } else if (zone == 1) {
+            // === FOREST: Arena navigation (weight x1.0) ===
+            int aAct = ((act % 4) + 4) % 4;
+            int prevMinDist = 999;
+            for (int i = 0; i < 4; i++) { int d = (ax>ecoNodes[i][0]?ax-ecoNodes[i][0]:ecoNodes[i][0]-ax)+(ay>ecoNodes[i][1]?ay-ecoNodes[i][1]:ecoNodes[i][1]-ay); if (d<prevMinDist) prevMinDist=d; }
+            int nx = ax, ny = ay;
+            if (aAct == 0) ny--; else if (aAct == 1) nx++; else if (aAct == 2) ny++; else nx--;
+            int hitWall = 0;
+            if (nx < 0 || nx > 23 || ny < 0 || ny > 23) { hitWall = 1; nx = (nx<0?0:nx); nx = (nx>23?23:nx); ny = (ny<0?0:ny); ny = (ny>23?23:ny); }
+            ax = nx; ay = ny;
+            if (hitWall) zoneReward -= 3.5;
+            int newMinDist = 999;
+            for (int i = 0; i < 4; i++) {
+                if (ecoNodes[i][0] == nx && ecoNodes[i][1] == ny) {
+                    zoneReward += 30.0; energy = (energy + 25.0 > 100.0 ? 100.0 : energy + 25.0);
+                    ecoNodes[i][0] = 16 + (int)(xorshift32() % 8); ecoNodes[i][1] = (int)(xorshift32() % 8);
+                }
+                int d = (nx>ecoNodes[i][0]?nx-ecoNodes[i][0]:ecoNodes[i][0]-nx)+(ny>ecoNodes[i][1]?ny-ecoNodes[i][1]:ecoNodes[i][1]-ny);
+                if (d < newMinDist) newMinDist = d;
+            }
+            zoneReward += (prevMinDist - newMinDist) * 2.5 + (newMinDist < 14 ? (14 - newMinDist) * 0.45 : 0.0);
+            for (int i = 0; i < 3; i++) if (ecoHazards[i][0] == nx && ecoHazards[i][1] == ny) { energy -= 22.0; zoneReward -= 18.0; }
+            zoneReward *= 1.0;
+        } else if (zone == 2) {
+            // === PUZZLE: Bitstream prediction (weight x1.5) ===
+            int pred = act & 0x0f;
+            int target = (ecoBitCurr ^ (ecoBitPrev >> 1)) & 0x0f;
+            int x = pred ^ target, err = 0; while (x) { err += (x & 1); x >>= 1; }
+            zoneReward = (4 - err) * 4.0 + (pred == target ? 10.0 : 0.0);
+            int nextByte = (int)(xorshift32() & 15);
+            ecoBitPrev = ecoBitCurr; ecoBitCurr = nextByte;
+            zoneReward *= 1.5;
+        } else if (zone == 3) {
+            // === TOWER: Hardware bus prediction (weight x1.5) ===
+            int pred = act & 0x0f;
+            int dP0 = (int)(xorshift32() % 10);
+            int target = ((ecoHwA ^ ecoHwB) + (dP0 >> 1)) & 0x0f;
+            int x = pred ^ target, err = 0; while (x) { err += (x & 1); x >>= 1; }
+            zoneReward = (4 - err) * 4.0 + (pred == target ? 10.0 : 0.0);
+            ecoHwA = (int)((ecoHwA + 7 + (xorshift32() & 15)) & 63);
+            ecoHwB = (int)(xorshift32() & 31);
+            zoneReward *= 1.5;
+        } else {
+            // === TRANSITION: navigation ===
+            int aAct = ((act % 4) + 4) % 4;
+            int nx = ax, ny = ay;
+            if (aAct == 0) ny--; else if (aAct == 1) nx++; else if (aAct == 2) ny++; else nx--;
+            if (nx < 0 || nx > 23 || ny < 0 || ny > 23) { nx = (nx<0?0:nx); nx = (nx>23?23:nx); ny = (ny<0?0:ny); ny = (ny>23?23:ny); }
+            ax = nx; ay = ny;
+            // Reward navigation toward nearest zone center
+            int d0 = (nx>4?nx-4:4-nx)+(ny>4?ny-4:4-ny); // house
+            int d1 = (nx>20?nx-20:20-nx)+(ny>4?ny-4:4-ny); // forest
+            int d2 = (nx>4?nx-4:4-nx)+(ny>20?ny-20:20-ny); // puzzle
+            int d3 = (nx>20?nx-20:20-nx)+(ny>20?ny-20:20-ny); // tower
+            int minD = d0; if (d1<minD) minD=d1; if (d2<minD) minD=d2; if (d3<minD) minD=d3;
+            zoneReward = (8.0 - minD * 0.3) > 0 ? (8.0 - minD * 0.3) : 0;
+        }
+
+        // Bonus for returning to house
+        if (zone == 0 && prevZone != 0) zoneReward += 5.0;
+        // Bonus for zone change (exploration)
+        if (zone != prevZone && zone >= 0 && prevZone >= 0) zoneReward += 2.0;
+        prevZone = zone;
+
+        score += zoneReward;
+    }
+    return score;
+}`
+            : `static double eval_task(const uint8_t *g, uint32_t seed) {
     rng_state = seed ? seed : 1;
     SiliciumVM vm = {0};
     memcpy(vm.active_code, g, PROG_LEN * 4);

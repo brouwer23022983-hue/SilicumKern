@@ -1120,7 +1120,7 @@ export default function App() {
                 1. Hardware-omgeving
               </label>
               <div className="space-y-1.5">
-                {(['homeostasis', 'arena', 'bitstream', 'hardware'] as TaskId[]).map((id) => (
+                {(['homeostasis', 'arena', 'bitstream', 'hardware', 'ecosystem'] as TaskId[]).map((id) => (
                   <button
                     key={id}
                     type="button"

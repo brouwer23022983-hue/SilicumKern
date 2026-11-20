@@ -1,6 +1,6 @@
 # SiliciumKern
 
-**SiliciumKern** is een lichte, **zero-VRAM** en **LLM-vrije** werkbank voor autonome AI-kernen in pure machinetaal. In plaats van gigabytes aan neurale gewichten of taalmodellen te gebruiken, evolueert SiliciumKern piepkleine binaire programma's van **384 bytes per kern** die rechtstreeks op registers, L1-geheugen, 128-bit SIMD-vectoren en een gedeelde hardware-bus rekenen.
+**SiliciumKern** is een lichte, **zero-VRAM** en **LLM-vrije** werkbank voor autonome AI-kernen in pure machinetaal. In plaats van gigabytes aan neurale gewichten of taalmodellen te gebruiken, evolueert SiliciumKern piepkleine binaire programma's van **640 bytes per kern** (256B programma + 256B RAM + registers) die rechtstreeks op registers, L1-geheugen, 128-bit SIMD-vectoren en een gedeelde hardware-bus rekenen.
 
 ---
 
@@ -10,12 +10,17 @@
 - **Multi-Worker Parallelle Evolutie**: Alle beschikbare CPU-threads worden gebruikt voor parallelle evolutie via een Web Worker-pool. Elke worker evolueert een sub-populatie onafhankelijk; na elke generatie worden de resultaten samengevoegd.
 - **Handgeschreven Starter Genomes**: Elke hardware-omgeving beschikt over een handgeschreven start-genoom dat sensoren leest en doelgericht gedrag vertoont, waardoor de evolutie niet vastloopt in lokale optima.
 - **Verbeterd Evolutie-algoritme**: Toernooiselectie (size 5), SENSE-injectie (40% kans), gerichte mutaties (30% kans op sensor-opcodes), adaptieve mutatie-rate (hoger in vroege generaties) en fresh immigrants met starter genome voorkomen premature convergentie.
-- **Zero-VRAM & L1-cache footprint**: Elke kern bestaat uit **128 bytes programmageheugen** (32 instructies × 4 bytes), **128 bytes L1 scratchpad RAM** (16 woorden), **8 scalaire registers (`R0..R7`)**, **4 × 128-bit SIMD-registers (`XMM0..XMM3`)** en CPU-vlaggen (`ZF`, `CF`, `SF`).
-- **44 Hardware-opcodes (`0x00..0x2B`)**:
-  - **Data & ALU (`0x00..0x0D`)**: `NOP`, `MOVI`, `MOV`, `SWAP`, `ADD`, `ADDI`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `ABS`, `INC`, `DEC`
+- **Zero-VRAM & L1-cache footprint**: Elke kern bestaat uit **256 bytes programmageheugen** (64 instructies × 4 bytes), **256 bytes L1 scratchpad RAM** (32 woorden), **8 scalaire registers (`R0..R7`)**, **4 × 128-bit SIMD-registers (`XMM0..XMM3`)** en CPU-vlaggen (`ZF`, `CF`, `SF`).
+- **256 Hardware-opcodes (`0x00..0xFF`)** — volledige Pentium instructiesets:
+  - **x86 Basis (`0x00..0x0D`)**: `NOP`, `MOVI`, `MOV`, `SWAP`, `ADD`, `ADDI`, `SUB`, `MUL`, `DIV`, `MOD`, `NEG`, `ABS`, `INC`, `DEC`, `IMUL`, `SAL`, `SAR`, `SETC`
   - **Bit-manipulatie (`0x0E..0x17`)**: `AND`, `OR`, `XOR`, `NOT`, `SHL`, `SHR`, `ROL`, `ROR`, `POPCNT`, `BSWAP`
-  - **Flow & Geheugen (`0x18..0x20`)**: `CMP`, `TEST`, `JMP`, `JZ`, `JNZ`, `JLT`, `LOAD`, `STORE`, `CMOVLT`
+  - **Flow & Geheugen (`0x18..0x20`)**: `CMP`, `TEST`, `JMP`, `JZ`, `JNZ`, `JLT`, `JGE`, `JLE`, `JG`, `CALL`, `RET`, `PUSH`, `POP`, `LOAD`, `STORE`, `CMOV*`
   - **128-bit SIMD (`0x21..0x25`)**: `VLOAD`, `VSTORE`, `VADD`, `VXOR`, `VSUM` (4 × 32-bit parallelle vector-lanes)
+  - **MMX (24 opcodes)**: `PADDSW`, `PADDUSB`, `PADDD`, `PSUB*`, `PMULLW/HW/UDQ`, `PSLL/RL/D`, `PCMPEQ*`, `PACK*`, `PUNPCK*`, `PAND/N/OR`, `PXOR`, `MOVQ`, `EMMS`
+  - **SSE (22 opcodes)**: `ADD/MUL/SUB/DIV SS/PS`, `MIN/MAX SS/PS`, `SQRT SS/PS`, `CMP SS/PS`, `MOV SS/PS/APS/UPS`, `SHUFPS`, `UNPCK*`, `CVT*`
+  - **SSE2 (32 opcodes)**: `MOVDQA/DQU`, `MOVDDUP/SHDUP`, `PAVG*`, `PMIN/MAX*`, `CVTDQ2PS/PS2DQ`, `ADDPD/MULPD/SUBPD/DIVPD`, `SQRTPD`, `CMPPD`
+  - **SSE3 (12 opcodes)**: `ADDSUBPS/PD`, `HADDPS/HSUBPS/PD`, `LDDQU`, `MOVNTDQ`, `FADDSS/FMULSS`, `MONITOR/MWAIT`
+  - **Extra SIMD (36 opcodes)**: `VSUB`, `VMUL`, `VDIV`, `VMIN`, `VMAX`, `VAND`, `VOR`, `VSHUFFLE`, `VUNPCK*`, `VMOVMSK`, `VCMPEQ/LT/LE`, `VABS`, `VNEG`, `VSQRT`, `VRSQRT`, `VRCPPS`, `VEXTRACT`, `VINSERT`, `VBLEND`, `VPERM`, `VSHL/HR`, `VROL/ROR`, `VPOPCNT`, `VBSWAP`
   - **Sensor & Actuator I/O (`0x26..0x27`)**: `SENSE` (leest live poort `P0..P7`), `ACT` (stuurt stuuractie en sluit tick af)
   - **Self-Modifying Code & Multi-Core Bus (`0x28..0x2B`)**:
     - `PREAD` / `PWRITE`: Lees en herschrijf het eigen actieve 32-bit programmawoord tijdens runtime (**SMC**).
@@ -85,7 +90,7 @@
 7. **Automatische opslag**: je generatie, beste genoom, populatie en instellingen worden automatisch lokaal in je browser (`localStorage`) bewaard.
 
 ### 2. Instructieset
-Open het tabblad **Instructieset** voor een doorzoekbaar en filterbaar overzicht van alle **44 opcodes** (`0x00`..`0x2B`) met syntaxis en hardware-uitleg.
+Open het tabblad **Instructieset** voor een doorzoekbaar en filterbaar overzicht van alle **256 opcodes** (`0x00`..`0xFF`) met syntaxis en hardware-uitleg, inclusief filters voor x86, MMX, SSE, SSE2 en SSE3 categorieën.
 
 ### 3. Benchmark & Validatie (Web Worker)
 Open het tabblad **Benchmark** voor twee gecontroleerde wetenschappelijke proeven die asynchroon op de achtergrond draaien:
@@ -93,11 +98,11 @@ Open het tabblad **Benchmark** voor twee gecontroleerde wetenschappelijke proeve
 - **A/B-Test `PWRITE` AAN vs UIT**: start twee identieke beginpopulaties naast elkaar en vergelijkt beide op 50 ongeziene validatie-seeds.
 
 ### 4. Code-export (lokaal draaien zonder browser)
-Open het tabblad **Code-export** om je geëvolueerde 128-byte kernel direct te kopiëren of downloaden in 4 formaten:
+Open het tabblad **Code-export** om je geëvolueerde 256-byte kernel direct te kopiëren of downloaden in 4 formaten:
 - **C99 Kern**: losse C-functie + `main()` inclusief `active_code[]` (SMC) en `bus[8]` (`gcc -O3 -march=native ... -o micro_ai`).
-- **C99 Volledige Trainer**: zelfstandige evolutie-trainer inclusief 44-opcode VM voor 5 taken (`homeostasis`, `arena`, `bitstream`, `hardware`, `ecosystem`) in pure C99. Geoptimaliseerd met populatie 256, toernooiselectie (size 5), single-point crossover (70%), SENSE-injectie (40%), adaptieve mutatie-rate en geforceerde SENSE-instructies voor arena/ecosystem taak (`gcc -O3 -march=native ... -o trainer`).
+- **C99 Volledige Trainer**: zelfstandige evolutie-trainer inclusief 256-opcode VM voor 5 taken (`homeostasis`, `arena`, `bitstream`, `hardware`, `ecosystem`) in pure C99. Geoptimaliseerd met populatie 256, toernooiselectie (size 5), single-point crossover (70%), SENSE-injectie (40%), adaptieve mutatie-rate en geforceerde SENSE-instructies voor arena/ecosystem taak (`gcc -O3 -march=native ... -o trainer`).
 - **x86-64 + SSE2 NASM**: directe 64-bit x86 assembly met echte `r8..r15` en `xmm0..xmm3` instructies, `MAX_CYCLES` lus-beveiliging en echte `BWRITE`/`BREAD` bus-opcodes (`nasm -f elf64 ... -o micro_ai.o`).
-- **Ruwe Hex**: ruwe `uint8_t[128]` hex-dump voor embedded/no-std C, Rust of bootloaders.
+- **Ruwe Hex**: ruwe `uint8_t[256]` hex-dump voor embedded/no-std C, Rust of bootloaders.
 
 ---
 
@@ -180,6 +185,21 @@ De repository bouwt schoon met standaard Vite (`npm run build` → output in `di
 
 **Oorzaak:**
 - De evolutie liep vast in lokale optima waarbij kernen geen sensoren lasen en constant dezelfde actie uitvoerden (bijv. altijd "omlaag" in arena). Mutaties die SENSE toevoegden, verstoorden het patroon en sterven uit voordat een complete beslisboom kon groeien.
+
+### Versie 2.2 — Pentium Instructiesets & Genoom Uitbreiding (2026-11-20)
+
+**Nieuw:**
+- **Volledige Pentium instructiesets**: De VM is uitgebreid van 44 naar **256 opcodes** (`0x00..0xFF`) met alle Pentium III/4/4 HT instructies:
+  - **MMX (24 opcodes)**: Saturating arithmetic (`PADDSW`, `PADDUSB`), multiplicatie (`PMULLW/HW/UDQ`), shifts (`PSLL/RL/D`), vergelijkingen (`PCMPEQ*`), pack/unpack, logische operaties (`PAND/N/OR`, `PXOR`).
+  - **SSE (22 opcodes)**: Floating-point SIMD (`ADD/MUL/SUB/DIV SS/PS`), `MIN/MAX`, `SQRT`, `CMP`, data movement (`MOV SS/PS/APS/UPS`), `SHUFPS`, `UNPCK`, `CVT`.
+  - **SSE2 (32 opcodes)**: Integer SIMD (`MOVDQA/DQU`, `PAVG*`, `PMIN/MAX*`), double precision (`ADDPD/MULPD/SUBPD/DIVPD`), `CVTDQ2PS/PS2DQ`.
+  - **SSE3 (12 opcodes)**: Horizontal operations (`HADDPS/HSUBPS/PD`), `ADDSUBPS/PD`, `FADDSS/FMULSS`, `MONITOR/MWAIT`.
+  - **Extra SIMD (36 opcodes)**: `VSUB`, `VMUL`, `VDIV`, `VMIN`, `VMAX`, `VAND`, `VOR`, `VSHUFFLE`, `VCMPEQ/LT/LE`, `VABS`, `VNEG`, `VSQRT`, `VRSQRT`, `VRCPPS`, `VEXTRACT`, `VINSERT`, `VBLEND`, `VPERM`, `VSHL/HR`, `VROL/ROR`, `VPOPCNT`, `VBSWAP`.
+  - **Extra Flow/Memory (14 opcodes)**: `JGE`, `JLE`, `JG`, `CALL`, `RET`, `PUSH`, `POP`, `CMOVE/NE/GE/LE/G`.
+  - **Extra ALU (4 opcodes)**: `IMUL`, `SAL`, `SAR`, `SETC`.
+- **Genoom uitgebreid**: Van 128 bytes (32 instructies) naar **256 bytes (64 instructies)** — ruimte voor complexere AI-gedrag en alle Pentium-instructies.
+- **RAM uitgebreid**: Van 16 woorden naar **32 woorden** (256 bytes) — meer ruimte voor L1 scratchpad data.
+- **Ecosysteem starter genome fix**: P7 (huisje-richting) wordt nu correct gedecodeerd. P7 is een 4-bit encoding (bit3=DX<0, bit2=DX>0, bit1=DY<0, bit0=DY>0). Het genome decodeert DX eerst, dan DY, en kiest de juiste richting (Noord/Oost/Zuid/West). De avatar navigeert nu correct naar het huisje.
 
 ### Versie 2.1 — Ecosysteem Lab (2026-11-20)
 
