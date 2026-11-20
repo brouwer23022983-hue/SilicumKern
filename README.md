@@ -95,9 +95,25 @@ Open het tabblad **Benchmark** voor twee gecontroleerde wetenschappelijke proeve
 ### 4. Code-export (lokaal draaien zonder browser)
 Open het tabblad **Code-export** om je geëvolueerde 128-byte kernel direct te kopiëren of downloaden in 4 formaten:
 - **C99 Kern**: losse C-functie + `main()` inclusief `active_code[]` (SMC) en `bus[8]` (`gcc -O3 -march=native ... -o micro_ai`).
-- **C99 Volledige Trainer**: zelfstandige evolutie-trainer inclusief 44-opcode VM voor 4 taken (`homeostasis`, `arena`, `bitstream`, `hardware`) in pure C99. Geoptimaliseerd met populatie 256, toernooiselectie (size 5), single-point crossover (70%), SENSE-injectie (40%), adaptieve mutatie-rate en geforceerde SENSE-instructies voor arena-taak (`gcc -O3 -march=native ... -o trainer`).
+- **C99 Volledige Trainer**: zelfstandige evolutie-trainer inclusief 44-opcode VM voor 5 taken (`homeostasis`, `arena`, `bitstream`, `hardware`, `ecosystem`) in pure C99. Geoptimaliseerd met populatie 256, toernooiselectie (size 5), single-point crossover (70%), SENSE-injectie (40%), adaptieve mutatie-rate en geforceerde SENSE-instructies voor arena/ecosystem taak (`gcc -O3 -march=native ... -o trainer`).
 - **x86-64 + SSE2 NASM**: directe 64-bit x86 assembly met echte `r8..r15` en `xmm0..xmm3` instructies, `MAX_CYCLES` lus-beveiliging en echte `BWRITE`/`BREAD` bus-opcodes (`nasm -f elf64 ... -o micro_ai.o`).
 - **Ruwe Hex**: ruwe `uint8_t[128]` hex-dump voor embedded/no-std C, Rust of bootloaders.
+
+---
+
+## Hardware-compatibiliteit (Pentium CPU-instructiesets)
+
+De SiliciumKern VM en NASM-export zijn ontworpen om te draaien op oudere x86-processors. Hieronder een overzicht van de ondersteunde instructiesets per Pentium-generatie:
+
+| Processor | Instructiesets | Totaal instructies |
+|---|---|---|
+| **Pentium III (P3)** | x86 + MMX + SSE | ~377 |
+| **Pentium 4** | x86 + MMX + SSE + SSE2 | ~521 |
+| **Pentium 4 HT** | x86 + MMX + SSE + SSE2 + SSE3 | ~534 |
+
+- **Pentium III**: De EcosystemCanvas renderer is Pentium 3 compatible — lichte pseudo-3D/isometrische 2D canvas rendering zonder WebGL.
+- **Pentium 4**: De x86-64 + SSE2 NASM-export draait op Pentium 4 en nieuwer.
+- **Pentium 4 HT**: Hyper-Threading ondersteunt 2 logische threads per fysieke core — de multi-worker evolutie profiteert hier van.
 
 ---
 
