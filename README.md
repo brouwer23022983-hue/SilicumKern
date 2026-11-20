@@ -51,13 +51,16 @@
    - **Sensorpoorten (`P0..P7`)**: `P0` Kanaal A (Camera luma / Muis-dX / Gamepad as 0), `P1` Kanaal B (Camera-beweging / Muis-dY / Gamepad as 1), `P2` Invoerwoord (Toets/Muisknop/Lenscontrast), `P3` Hardware-capability-mask (`0x00..0xFF`), `P4` Signaal-delta (`dP0`), `P5` Vorige ACT-echo, `P6` Bus-entropie, `P7` Klok-tick.  
    - **Acties (`ACT`)**: onderste 4 bits (`waarde & 0x0F`) sturen de live bus-respons aan.
 
-5. **Ecosysteem (`ecosystem` — 4-in-1 gecombineerd)**  
+5. **Ecosysteem (`ecosystem` — 4-in-1 gecombineerd + dag/nacht cyclus + geheugen)**  
    Navigeer met een avatar door een **24×24 bos** met **4 zones** die elk een andere sub-taak trainen. De avatar ontvangt altijd alle 4 soorten sensoren, maar de huidige zone bepaalt welke sub-taak actief is. Moeilijke taken krijgen zwaardere beloning.  
-   - **Zones**: 🏠 Huisje (links-boven, homeostasis ×0.8), 🌲 Bos (rechts-boven, arena ×1.0), 🪨 Puzzelstenen (links-onder, bitstream ×1.5), 📡 Sensor-toren (rechts-onder, hardware ×1.5).  
-   - **Sensorpoorten (`P0..P7`)**: `P0..P3` Zone-specifieke sensoren, `P4` Energie (%), `P5` Klok-tick, `P6` Zone-ID (0-3), `P7` Huisje-richting.  
+   - **Zones**: 🏠 Huisje (links-boven 0-7,0-7, homeostasis ×0.8), 🌲 Bos (rechts-boven 16-23,0-7, arena ×1.0), 🪨 Puzzelstenen (links-onder 0-7,16-23, bitstream ×1.5), 📡 Sensor-toren (rechts-onder 16-23,16-23, hardware ×1.5).  
+   - **Sensorpoorten (`P0..P7`)**: `P0..P3` Zone-specifieke sensoren, `P4` Energie (%), `P5` Dag-fase (0-4) + progress, `P6` Zone-ID + slaap-status, `P7` Huisje-richting + geheugen-grootte.  
    - **Acties (`ACT`)**: `0..3` Zone-actie (homeostasis/arena), `0..15` Bit-voorspelling (bitstream/hardware).  
-   - **Fitness**: Gewogen som van alle sub-scores per tick. Navigatie naar het huisje wordt extra beloond. Energie vermindert per tick; avatar sterft bij energie ≤ 0.  
-   - **Rendering**: Blaxxun Interactive stijl — lichte pseudo-3D/isometrische 2D canvas rendering, Pentium 3 compatible.
+   - **Dag/nacht cyclus**: 5 fasen × 12 ticks = 60 ticks per dag. Ritme: 🌅 ochtend→toren, ☀️ middag1→puzzel, 🌤️ middag2→bos, 🌇 avond→thuis, 🌙 nacht→thuis opladen. Rhythm bonus (+8) voor het volgen van het ritme.  
+   - **Geheugen-systeem**: Kortetermijn geheugen (8 slots) verzamelt ervaringen overdag (zone + energie + resultaat). 's Nachts in het huisje slaapt de avatar (💤) en consolideert de meest voorkomende ervaringen naar langetermijn geheugen (8 slots) — net zoals biologische hersenen. Elke nieuwe dag krijgt de avatar een bonus voor geconsolideerde kennis.  
+   - **Energie-systeem**: Energie vermindert per tick (0.8 overdag, 0.3 's nachts). In het huisje laadt de avatar op (eten): 1.5/tick overdag, 3.0/tick 's nachts. Avatar sterft bij energie ≤ 0.  
+   - **Fitness**: Gewogen som van alle sub-scores per tick. Navigatie naar huisje wordt extra beloond. Verkenning-bonus (+2) bij zone-wisseling.  
+   - **Rendering**: Blaxxun Interactive stijl — lichte pseudo-3D/isometrische 2D canvas rendering met dag-fase indicator, target zone highlight, slaap-indicator en geheugen-info. Pentium 3 compatible.
 
 ---
 
@@ -200,6 +203,17 @@ De repository bouwt schoon met standaard Vite (`npm run build` → output in `di
 - **Genoom uitgebreid**: Van 128 bytes (32 instructies) naar **256 bytes (64 instructies)** — ruimte voor complexere AI-gedrag en alle Pentium-instructies.
 - **RAM uitgebreid**: Van 16 woorden naar **32 woorden** (256 bytes) — meer ruimte voor L1 scratchpad data.
 - **Ecosysteem starter genome fix**: P7 (huisje-richting) wordt nu correct gedecodeerd. P7 is een 4-bit encoding (bit3=DX<0, bit2=DX>0, bit1=DY<0, bit0=DY>0). Het genome decodeert DX eerst, dan DY, en kiest de juiste richting (Noord/Oost/Zuid/West). De avatar navigeert nu correct naar het huisje.
+
+### Versie 2.3 — Dag/Nacht Cyclus & Geheugen (2026-11-20)
+
+**Nieuw:**
+- **Dag/nacht cyclus in ecosysteem**: 5 fasen × 12 ticks = 60 ticks per volledige dag. Ritme: 🌅 ochtend→toren (hardware), ☀️ middag1→puzzel (bitstream), 🌤️ middag2→bos (arena), 🌇 avond→thuis (homeostasis), 🌙 nacht→thuis opladen. Rhythm bonus (+8) voor het volgen van het ritme.
+- **Kortetermijn geheugen (8 slots)**: Overdag (fase 0-3) verzamelt de avatar elke 3 ticks een ervaring: zone + energie + resultaat. Dit werkt als een circular buffer.
+- **Langetermijn geheugen (8 slots)**: 's Nachts (fase 4) in het huisje slaapt de avatar (💤) en na 4 ticks consolideert de meest voorkomende ervaringen naar langetermijn geheugen — net zoals biologische hersenen herinneringen verwerken tijdens slaap.
+- **Slaap-mechaniek**: De avatar slaapt alleen 's nachts in het huisje. Tijdens slapen laadt de energie sneller op (1.5/tick extra) en worden herinneringen geconsolideerd. Elke nieuwe dag krijgt de avatar een bonus voor geconsolideerde kennis.
+- **Energie-systeem per dag-fase**: Energie vermindert 0.8/tick overdag, 0.3/tick 's nachts. In het huisje laadt de avatar op: 1.5/tick overdag, 3.0/tick 's nachts.
+- **Sensor-updates**: P5 geeft nu dag-fase (0-4) + progress, P6 geeft zone-ID + slaap-status (bit 3), P7 geeft huisje-richting + geheugen-grootte (bits 4-7).
+- **EcosystemCanvas updates**: Dag-fase indicator (🌅☀️🌤️🌇🌙), target zone highlight (gele gestippelde rand), slaap-indicator (💤 Slaapt...), geheugen-info (🧠 Kort: X/8 Lang: X/8) en dagen-getal.
 
 ### Versie 2.1 — Ecosysteem Lab (2026-11-20)
 

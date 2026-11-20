@@ -680,6 +680,20 @@ export interface EnvSnapshot {
   ecoHazardHits: number;
   ecoBitExactHits: number;
   ecoHwExactHits: number;
+  // Day/night cycle
+  ecoDayPhase: number; // 0=morgen(ochtend), 1=middag1(puzzel), 2=middag2(bos), 3=avond, 4=nacht
+  ecoDayProgress: number; // 0.0-1.0 progress binnen huidige fase
+  ecoDayLength: number; // ticks per dag-fase (bijv. 12 ticks per fase)
+  ecoTargetZone: number; // doel-zone voor huidige dag-fase
+  ecoRhythmHits: number; // aantal keer het juiste ritme gevolgd
+  // Memory: short-term (overdag) en long-term (slapen/consolidatie)
+  ecoMemoryShort: number[]; // kortetermijn geheugen: ervaringen van vandaag (max 8 slots)
+  ecoMemoryLong: number[]; // langetermijn geheugen: geconsolideerde kennis (max 8 slots)
+  ecoMemoryIndex: number; // huidige schrijfpunt in kortetermijn geheugen
+  ecoSleeping: boolean; // avatar slaapt (nacht in huisje = consolidatie)
+  ecoSleepTicks: number; // ticks sinds slapen begon
+  ecoConsolidationBonus: number; // bonus voor geconsolideerde kennis
+  ecoDaysLived: number; // aantal dagen (elke nacht = nieuwe dag)
 };
 
 function scalarWidth(width: BitWidth): number {
@@ -2488,34 +2502,38 @@ export function createStarterGenome(taskId: TaskId): Uint8Array {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else if (taskId === 'ecosystem') {
-    // Ecosysteem: navigeer naar het huisje (links-boven zone 0-7, 0-7) als fallback.
-    // P4=energy, P5=tick, P6=zone-ID, P7=huisje-richting (4-bit encoding)
+    // Ecosysteem: dag/nacht ritme follower
+    // Ritme: ochtend(0)→toren(3), middag1(1)→puzzel(2), middag2(2)→bos(1), avond(3)→thuis(0), nacht(4)→thuis(0)
+    // P4=energy, P5=dag-fase(0-4)+progress, P6=zone-ID, P7=huisje-richting
+    // Strategie: lees P5 (dag-fase), bepaal target zone, navigeer daarnaartoe
+    // Target zone centers: huisje(4,4), bos(20,4), puzzel(4,20), toren(20,20)
     // P7 encoding: bit3=DX<0 (8), bit2=DX>0 (4), bit1=DY<0 (2), bit0=DY>0 (1)
-    // Decode P7 naar actie: 0=Noord, 1=Oost, 2=Zuid, 3=West
-    // Strategie: lees P7, check DX eerst (bit 2/3), dan DY (bit 0/1)
-    // Als DX != 0: beweeg X-richting (Oost=1 als DX>0, West=3 als DX<0)
-    // Als DX == 0: beweeg Y-richting (Noord=0 als DY<0, Zuid=2 als DY>0)
-    encodeInstruction(g, 0, Opcode.SENSE, 0, 7, 0);   // R0 = P7 (houseDir encoding)
-    encodeInstruction(g, 1, Opcode.MOVI, 1, 0, 4);     // R1 = 4 (mask voor DX>0 bit)
-    encodeInstruction(g, 2, Opcode.AND, 1, 0, 1);      // R1 = R0 & 4 (DX>0?)
-    encodeInstruction(g, 3, Opcode.MOVI, 2, 0, 8);     // R2 = 8 (mask voor DX<0 bit)
-    encodeInstruction(g, 4, Opcode.AND, 2, 0, 2);      // R2 = R0 & 8 (DX<0?)
-    encodeInstruction(g, 5, Opcode.CMP, 1, 2, 0);      // CMP R1, R2 (DX>0 vs DX<0)
-    encodeInstruction(g, 6, Opcode.JLT, 0, 0, 10);     // als DX>0 < DX<0 → DX<0, ga West (@10)
-    encodeInstruction(g, 7, Opcode.JNZ, 0, 0, 8);      // als R1 != 0 → DX>0, ga Oost (@8)
-    encodeInstruction(g, 8, Opcode.JMP, 0, 0, 12);     // DX==0, check Y (@12)
-    encodeInstruction(g, 9, Opcode.MOVI, 3, 0, 1);     // R3 = 1 (Oost)
-    encodeInstruction(g, 10, Opcode.JMP, 0, 0, 14);    // naar ACT (@14)
-    encodeInstruction(g, 11, Opcode.MOVI, 3, 0, 3);    // R3 = 3 (West)
-    encodeInstruction(g, 12, Opcode.MOVI, 1, 0, 1);    // R1 = 1 (mask voor DY>0 bit)
-    encodeInstruction(g, 13, Opcode.AND, 1, 0, 1);     // R1 = R0 & 1 (DY>0?)
-    encodeInstruction(g, 14, Opcode.JNZ, 0, 0, 16);    // als DY>0 → Zuid (@16)
-    encodeInstruction(g, 15, Opcode.MOVI, 3, 0, 0);    // R3 = 0 (Noord - fallback)
-    encodeInstruction(g, 16, Opcode.JMP, 0, 0, 17);    // naar ACT (@17)
-    encodeInstruction(g, 17, Opcode.MOVI, 3, 0, 2);    // R3 = 2 (Zuid)
-    encodeInstruction(g, 18, Opcode.ACT, 0, 3, 0);     // ACT R3 (beweeg naar huisje)
-    // Rest NOP — evolutie vult de zone-specifieke logica in
-    for (let i = 19; i < PROG_LEN; i++) {
+    encodeInstruction(g, 0, Opcode.SENSE, 0, 5, 0);   // R0 = P5 (dag-fase + progress)
+    encodeInstruction(g, 1, Opcode.SENSE, 1, 7, 0);   // R1 = P7 (huisje-richting)
+    // R0 bevat dag-fase in bits 0-2 (waarde 0-4)
+    // We gebruiken de huisje-richting (P7) als fallback navigatie
+    // De evolutie leert de dag-fase te gebruiken voor target zone selectie
+    // Voor nu: decodeer P7 en navigeer (evolutie verbetert dit)
+    encodeInstruction(g, 2, Opcode.MOVI, 2, 0, 4);     // R2 = 4 (mask voor DX>0 bit)
+    encodeInstruction(g, 3, Opcode.AND, 2, 1, 2);      // R2 = R1 & 4 (DX>0?)
+    encodeInstruction(g, 4, Opcode.MOVI, 3, 0, 8);     // R3 = 8 (mask voor DX<0 bit)
+    encodeInstruction(g, 5, Opcode.AND, 3, 1, 3);      // R3 = R1 & 8 (DX<0?)
+    encodeInstruction(g, 6, Opcode.CMP, 2, 3, 0);      // CMP R2, R3 (DX>0 vs DX<0)
+    encodeInstruction(g, 7, Opcode.JLT, 0, 0, 11);     // als DX>0 < DX<0 → DX<0, ga West (@11)
+    encodeInstruction(g, 8, Opcode.JNZ, 0, 0, 9);      // als R2 != 0 → DX>0, ga Oost (@9)
+    encodeInstruction(g, 9, Opcode.JMP, 0, 0, 13);     // DX==0, check Y (@13)
+    encodeInstruction(g, 10, Opcode.MOVI, 4, 0, 1);    // R4 = 1 (Oost)
+    encodeInstruction(g, 11, Opcode.JMP, 0, 0, 15);    // naar ACT (@15)
+    encodeInstruction(g, 12, Opcode.MOVI, 4, 0, 3);    // R4 = 3 (West)
+    encodeInstruction(g, 13, Opcode.MOVI, 2, 0, 1);    // R2 = 1 (mask voor DY>0 bit)
+    encodeInstruction(g, 14, Opcode.AND, 2, 1, 2);     // R2 = R1 & 1 (DY>0?)
+    encodeInstruction(g, 15, Opcode.JNZ, 0, 0, 17);    // als DY>0 → Zuid (@17)
+    encodeInstruction(g, 16, Opcode.MOVI, 4, 0, 0);    // R4 = 0 (Noord - fallback)
+    encodeInstruction(g, 17, Opcode.JMP, 0, 0, 18);    // naar ACT (@18)
+    encodeInstruction(g, 18, Opcode.MOVI, 4, 0, 2);    // R4 = 2 (Zuid)
+    encodeInstruction(g, 19, Opcode.ACT, 0, 4, 0);     // ACT R4 (beweeg)
+    // Rest NOP — evolutie leert dag-fase te gebruiken voor target zone navigatie
+    for (let i = 20; i < PROG_LEN; i++) {
       encodeInstruction(g, i, Opcode.NOP, 0, 0, 0);
     }
   } else if (taskId === 'bitstream') {
@@ -2640,6 +2658,18 @@ export function createInitialEnv(
     ecoHazardHits: 0,
     ecoBitExactHits: 0,
     ecoHwExactHits: 0,
+    ecoDayPhase: 0,
+    ecoDayProgress: 0,
+    ecoDayLength: 12,
+    ecoTargetZone: 3, // ochtend → toren
+    ecoRhythmHits: 0,
+    ecoMemoryShort: new Array(8).fill(0),
+    ecoMemoryLong: new Array(8).fill(0),
+    ecoMemoryIndex: 0,
+    ecoSleeping: false,
+    ecoSleepTicks: 0,
+    ecoConsolidationBonus: 0,
+    ecoDaysLived: 0,
   };
 
   // Ecosystem-specific initialization
@@ -2671,6 +2701,21 @@ export function createInitialEnv(
     env.ecoHazardHits = 0;
     env.ecoBitExactHits = 0;
     env.ecoHwExactHits = 0;
+    // Day/night cycle initialization
+    // Ritme: ochtend→toren(3), middag1→puzzel(2), middag2→bos(1), avond→thuis(0), nacht→thuis(0)
+    env.ecoDayPhase = 0; // start bij ochtend
+    env.ecoDayProgress = 0;
+    env.ecoDayLength = 12; // 12 ticks per fase = 60 ticks per volledige dag
+    env.ecoTargetZone = 3; // ochtend → toren (hardware)
+    env.ecoRhythmHits = 0;
+    // Memory initialization
+    env.ecoMemoryShort = new Array(8).fill(0);
+    env.ecoMemoryLong = new Array(8).fill(0);
+    env.ecoMemoryIndex = 0;
+    env.ecoSleeping = false;
+    env.ecoSleepTicks = 0;
+    env.ecoConsolidationBonus = 0;
+    env.ecoDaysLived = 0;
     // Detect initial zone
     env.ecoZone = getEcosystemZone(env.agentX, env.agentY);
   }
@@ -2685,6 +2730,18 @@ function getEcosystemZone(x: number, y: number): number {
   if (x < 8 && y >= 16) return 2; // Puzzle stones (bottom-left)
   if (x >= 16 && y >= 16) return 3; // Sensor tower (bottom-right)
   return -1; // Transition zone (between zones)
+}
+
+// Bereken Manhattan-afstand van (x,y) naar het centrum van een target zone
+function zoneDistance(x: number, y: number, targetZone: number): number {
+  const centers = [
+    { x: 4, y: 4 },     // House (0-7, 0-7)
+    { x: 20, y: 4 },    // Forest (16-23, 0-7)
+    { x: 4, y: 20 },    // Puzzle (0-7, 16-23)
+    { x: 20, y: 20 },   // Tower (16-23, 16-23)
+  ];
+  const c = centers[targetZone];
+  return Math.abs(c.x - x) + Math.abs(c.y - y);
 }
 
 export function updateEnvPorts(env: EnvSnapshot): void {
@@ -2786,15 +2843,22 @@ export function updateEnvPorts(env: EnvSnapshot): void {
     const houseDY = env.ecoHouseY - env.agentY;
     // Encode house direction in P7: pack DX sign (bit 3) and DY sign (bit 2)
     const houseDir = ((houseDX < 0 ? 8 : 0) | (houseDX > 0 ? 4 : 0) | (houseDY < 0 ? 2 : 0) | (houseDY > 0 ? 1 : 0));
+    // P5 = dag-fase (0-4) + dag-progress (bits 3-7) zodat avatar het ritme kan volgen
+    const daySensor = env.ecoDayPhase | (Math.floor(env.ecoDayProgress * 8) << 3);
+    // P6 = zone-ID + slaap-status (bit 3 = slapend)
+    const zoneSensor = Math.max(0, zone) | (env.ecoSleeping ? 8 : 0);
+    // P7 = huisje-richting + geheugen-info (bits 4-7 = aantal langetermijn kennis)
+    const knowledgeCount = env.ecoMemoryLong.filter(v => v !== 0).length;
+    const memorySensor = houseDir | (Math.min(15, knowledgeCount) << 4);
     env.ports = [
       p0p3[0],
       p0p3[1],
       p0p3[2],
       p0p3[3],
       Math.round(env.energy),
-      env.tick & 0xff,
-      Math.max(0, zone),
-      houseDir,
+      daySensor & 0xff, // P5 = dag-fase + progress
+      zoneSensor & 0xff, // P6 = zone-ID + slaap-status
+      memorySensor & 0xff, // P7 = huisje-richting + geheugen-grootte
     ];
   } else {
     // hardware
@@ -2986,18 +3050,49 @@ export function stepEnvironment(
     env.bitPrev = env.bitCurr;
     env.bitCurr = nextByte;
   } else if (env.taskId === 'ecosystem') {
-    // Ecosystem: zone-based sub-task with weighted rewards
-    // Detect current zone based on avatar position
+    // Ecosystem: zone-based sub-task with weighted rewards + day/night cycle
     const prevZone = env.ecoZone;
-    const newZone = getEcosystemZone(env.agentX, env.agentY);
-    env.ecoZone = newZone;
 
-    // Energy decreases per tick
-    env.energy = Math.max(0, env.energy - 0.8);
+    // === Day/Night Cycle ===
+    // Ritme: ochtend→toren(3), middag1→puzzel(2), middag2→bos(1), avond→thuis(0), nacht→thuis(0)
+    // 5 fasen, elk ecoDayLength ticks (12 ticks per fase = 60 ticks per dag)
+    env.ecoDayProgress += 1 / env.ecoDayLength;
+    if (env.ecoDayProgress >= 1.0) {
+      env.ecoDayProgress = 0;
+      env.ecoDayPhase = (env.ecoDayPhase + 1) % 5;
+    }
+    // Target zone per dag-fase
+    const targetZones = [3, 2, 1, 0, 0]; // ochtend, middag1, middag2, avond, nacht
+    env.ecoTargetZone = targetZones[env.ecoDayPhase];
 
-    // Navigation: interpret action based on zone
+    // Energy decreases per tick (meer 's nachts, minder overdag)
+    const energyDrain = env.ecoDayPhase === 4 ? 0.3 : 0.8; // nacht: minder energie verbruik
+    env.energy = Math.max(0, env.energy - energyDrain);
+
+    // Navigation happens in ALL zones so avatar can always move between zones
     const act = rawAction;
     env.lastAction = act;
+    const navAct = ((act % 4) + 4) % 4;
+    let nx = env.agentX;
+    let ny = env.agentY;
+    if (navAct === 0) ny -= 1;
+    else if (navAct === 1) nx += 1;
+    else if (navAct === 2) ny += 1;
+    else nx -= 1;
+    let hitWall = false;
+    if (nx < 0 || nx > 23 || ny < 0 || ny > 23) {
+      hitWall = true;
+      nx = Math.max(0, Math.min(23, nx));
+      ny = Math.max(0, Math.min(23, ny));
+    }
+    env.agentX = nx;
+    env.agentY = ny;
+    env.ecoTrail.push({ x: nx, y: ny });
+    if (env.ecoTrail.length > 36) env.ecoTrail.shift();
+
+    // Detect current zone AFTER move, so avatar is in the correct zone
+    const newZone = getEcosystemZone(nx, ny);
+    env.ecoZone = newZone;
 
     let zoneReward = 0;
     let zoneIdx = -1;
@@ -3005,7 +3100,7 @@ export function stepEnvironment(
     if (newZone === 0) {
       // === HOUSE ZONE: Homeostasis (weight ×0.8) ===
       zoneIdx = 0;
-      const hAct = ((act % 4) + 4) % 4;
+      const hAct = navAct; // Navigation action doubles as homeostasis action
       const incomingLoad = 4 + Math.floor(rng() * 6) + (env.tick % 9 === 0 ? 15 : 0);
 
       if (disturbance.tempSpike) env.ecoTemp += disturbance.tempSpike;
@@ -3045,35 +3140,15 @@ export function stepEnvironment(
     } else if (newZone === 1) {
       // === FOREST ZONE: Arena navigation (weight ×1.0) ===
       zoneIdx = 1;
-      const aAct = ((act % 4) + 4) % 4;
+      // Avatar already moved above, just check energy nodes and hazards
+
+      if (hitWall) zoneReward -= 3.5;
 
       let prevMinDist = 999;
       for (const n of env.ecoEnergyNodes) {
-        const d = Math.abs(n.x - env.agentX) + Math.abs(n.y - env.agentY);
+        const d = Math.abs(n.x - nx) + Math.abs(n.y - ny);
         if (d < prevMinDist) prevMinDist = d;
       }
-
-      let nx = env.agentX;
-      let ny = env.agentY;
-      if (aAct === 0) ny -= 1;
-      else if (aAct === 1) nx += 1;
-      else if (aAct === 2) ny += 1;
-      else nx -= 1;
-
-      // Clamp to 24x24 grid
-      let hitWall = false;
-      if (nx < 0 || nx > 23 || ny < 0 || ny > 23) {
-        hitWall = true;
-        nx = Math.max(0, Math.min(23, nx));
-        ny = Math.max(0, Math.min(23, ny));
-      }
-
-      env.agentX = nx;
-      env.agentY = ny;
-      env.ecoTrail.push({ x: nx, y: ny });
-      if (env.ecoTrail.length > 36) env.ecoTrail.shift();
-
-      if (hitWall) zoneReward -= 3.5;
 
       let newMinDist = 999;
       for (let i = 0; i < env.ecoEnergyNodes.length; i++) {
@@ -3129,27 +3204,7 @@ export function stepEnvironment(
       env.ecoHwStreamB = Math.floor(rng() * 32) ^ (env.ecoHwStreamA & 0x0f);
     } else {
       // === TRANSITION ZONE: between zones ===
-      // Allow navigation (action 0-3 = direction)
-      const aAct = ((act % 4) + 4) % 4;
-      let nx = env.agentX;
-      let ny = env.agentY;
-      if (aAct === 0) ny -= 1;
-      else if (aAct === 1) nx += 1;
-      else if (aAct === 2) ny += 1;
-      else nx -= 1;
-
-      // Clamp to 24x24 grid
-      if (nx < 0 || nx > 23 || ny < 0 || ny > 23) {
-        nx = Math.max(0, Math.min(23, nx));
-        ny = Math.max(0, Math.min(23, ny));
-      }
-
-      env.agentX = nx;
-      env.agentY = ny;
-      env.ecoTrail.push({ x: nx, y: ny });
-      if (env.ecoTrail.length > 36) env.ecoTrail.shift();
-
-      // Reward navigation toward a zone
+      // Avatar already moved above, just reward navigation toward a zone
       const distToHouse = Math.abs(env.ecoHouseX - nx) + Math.abs(env.ecoHouseY - ny);
       const distToForest = Math.abs(20 - nx) + Math.abs(4 - ny);
       const distToPuzzle = Math.abs(4 - nx) + Math.abs(20 - ny);
@@ -3174,6 +3229,112 @@ export function stepEnvironment(
     if (newZone !== prevZone && newZone >= 0 && prevZone >= 0) {
       zoneReward += 2; // Small bonus for exploring new zones
     }
+
+    // === Rhythm bonus: reward for being in the target zone for current day phase ===
+    if (newZone === env.ecoTargetZone) {
+      zoneReward += 8; // Bonus for following the daily rhythm
+      env.ecoRhythmHits += 1;
+    } else if (newZone >= 0) {
+      // Penalty for being in the wrong zone (but not in transition)
+      const distToTarget = zoneDistance(nx, ny, env.ecoTargetZone);
+      zoneReward += Math.max(0, 4 - distToTarget * 0.2); // Small reward for moving toward target
+    }
+
+    // === House zone: eating/charging mechanic ===
+    if (newZone === 0) {
+      // In het huisje: energie opladen (eten)
+      const chargeRate = env.ecoDayPhase === 4 ? 3.0 : 1.5; // nacht: meer opladen
+      env.energy = Math.min(100, env.energy + chargeRate);
+      // Extra beloning voor homeostasis in het huisje 's avonds en 's nachts
+      if (env.ecoDayPhase >= 3) { // avond of nacht
+        zoneReward += 3; // Bonus voor thuis zijn op het juiste moment
+      }
+    }
+
+    // === Short-term memory: store experiences during the day ===
+    // Overdag (fase 0-3): avatar slaat ervaringen op in kortetermijn geheugen
+    // Elk 3 ticks wordt een ervaring opgeslagen: zone, energie, en resultaat
+    if (env.ecoDayPhase < 4 && env.tick % 3 === 0) {
+      // Encodeer ervaring: zone (4 bits) + energie/10 (4 bits) + reward teken (4 bits)
+      const expZone = Math.max(0, newZone) & 0x0f;
+      const expEnergy = Math.min(15, Math.floor(env.energy / 7)) & 0x0f;
+      const expReward = zoneReward > 0 ? 1 : (zoneReward < 0 ? 2 : 0);
+      const experience = (expZone << 4) | expEnergy | (expReward & 0x03);
+      
+      // Schrijf in kortetermijn geheugen (circular buffer)
+      env.ecoMemoryShort[env.ecoMemoryIndex % 8] = experience;
+      env.ecoMemoryIndex++;
+    }
+
+    // === Sleep & consolidation: night phase in house ===
+    // 's Nachts (fase 4) in het huisje: avatar slaapt en consolideert herinneringen
+    if (env.ecoDayPhase === 4 && newZone === 0) {
+      if (!env.ecoSleeping) {
+        env.ecoSleeping = true;
+        env.ecoSleepTicks = 0;
+      }
+      env.ecoSleepTicks++;
+      
+      // Na 4 ticks slapen: consolidatie begint
+      if (env.ecoSleepTicks >= 4) {
+        // Verwerk kortetermijn geheugen naar langetermijn
+        // De meest voorkomende ervaringen worden geconsolideerd
+        const counts = new Array(256).fill(0);
+        for (const exp of env.ecoMemoryShort) {
+          counts[exp]++;
+        }
+        
+        // Top 8 ervaringen gaan naar langetermijn geheugen
+        // (gewogen gemiddelde met bestaande langetermijn)
+        for (let i = 0; i < 8; i++) {
+          // Vind de meest voorkomende ervaring die nog niet in long-term zit
+          let bestExp = 0;
+          let bestCount = 0;
+          for (let e = 0; e < 256; e++) {
+            if (counts[e] > bestCount && !env.ecoMemoryLong.includes(e)) {
+              bestCount = counts[e];
+              bestExp = e;
+            }
+          }
+          if (bestCount > 0) {
+            // Consolideer: meng met bestaande waarde
+            const existingIdx = env.ecoMemoryLong.indexOf(0); // lege slot
+            const idx = existingIdx >= 0 ? existingIdx : i % 8;
+            env.ecoMemoryLong[idx] = bestExp;
+            counts[bestExp] = 0; // niet meer gebruiken
+          }
+        }
+        
+        // Consolideringsbonus: meer langetermijn kennis = meer bonus
+        const knowledgeCount = env.ecoMemoryLong.filter(v => v !== 0).length;
+        env.ecoConsolidationBonus = knowledgeCount * 0.5;
+        
+        // Kortetermijn geheugen wordt geleegd na consolidatie
+        env.ecoMemoryShort = new Array(8).fill(0);
+        env.ecoMemoryIndex = 0;
+      }
+      
+      // Extra energie tijdens slapen
+      env.energy = Math.min(100, env.energy + 1.5);
+    } else {
+      // Niet slapen (overdag of niet in huisje)
+      env.ecoSleeping = false;
+      env.ecoSleepTicks = 0;
+    }
+
+    // === Day transition: night → morning ===
+    const prevDayPhase = env.ecoDayPhase;
+    if (env.ecoDayPhase === 0 && prevDayPhase === 4) {
+      // Nieuwe dag!
+      env.ecoDaysLived++;
+      // Bonus voor geconsolideerde kennis
+      zoneReward += env.ecoConsolidationBonus;
+    }
+
+    // === Memory sensor bonus ===
+    // Als de avatar zijn geheugen gebruikt (via LOAD instructies), geef bonus
+    // Dit wordt gedetecteerd via de VM state (lastRamRead)
+    // De evolutie leert om LOAD te gebruiken om geheugen te raadplegen
 
     reward += zoneReward;
 

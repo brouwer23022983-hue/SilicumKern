@@ -19,6 +19,8 @@ const ZONE_BORDER_COLORS = [
   '#F59E0B',  // Tower
 ];
 const ZONE_LABELS = ['🏠 Huisje', '🌲 Bos', '🪨 Puzzel', '📡 Toren'];
+const DAY_PHASES = ['🌅 Ochtend', '☀️ Middag 1', '🌤️ Middag 2', '🌇 Avond', '🌙 Nacht'];
+const DAY_TARGET_ZONES = [3, 2, 1, 0, 0]; // toren, puzzel, bos, thuis, thuis
 
 export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -222,6 +224,28 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
     ctx.lineWidth = 1;
     ctx.strokeRect(ox, oy, size, size);
 
+    // Target zone highlight (dag/nacht cyclus)
+    const dayPhase = env.ecoDayPhase ?? 0;
+    const targetZone = env.ecoTargetZone ?? DAY_TARGET_ZONES[dayPhase];
+    const targetZones = [
+      { x1: 0, y1: 0, x2: 8, y2: 8 },       // House
+      { x1: 16, y1: 0, x2: 24, y2: 8 },     // Forest
+      { x1: 0, y1: 16, x2: 8, y2: 24 },     // Puzzle
+      { x1: 16, y1: 16, x2: 24, y2: 24 },   // Tower
+    ];
+    if (targetZone >= 0 && targetZone < 4) {
+      const tz = targetZones[targetZone];
+      const tzx = ox + tz.x1 * cell;
+      const tzy = oy + tz.y1 * cell;
+      const tzw = (tz.x2 - tz.x1) * cell;
+      const tzh = (tz.y2 - tz.y1) * cell;
+      ctx.strokeStyle = 'rgba(250, 204, 21, 0.6)'; // gele rand voor target
+      ctx.lineWidth = 3;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(tzx, tzy, tzw, tzh);
+      ctx.setLineDash([]);
+    }
+
     // Current zone indicator
     const currentZone = env.ecoZone ?? -1;
     if (currentZone >= 0) {
@@ -232,6 +256,40 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
         ox + size - 80,
         oy + size - 8
       );
+    }
+
+    // Day phase indicator (top-left)
+    ctx.font = 'bold 12px "JetBrains Mono", monospace';
+    const phaseLabel = DAY_PHASES[dayPhase] || DAY_PHASES[0];
+    ctx.fillStyle = dayPhase === 4 ? '#818CF8' : '#FCD34D'; // nacht=purple, overdag=yellow
+    ctx.fillText(phaseLabel, ox + 4, oy - 6);
+    // Target zone label
+    ctx.fillStyle = '#94A3B8';
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillText('→ ' + ZONE_LABELS[targetZone], ox + ctx.measureText(phaseLabel).width + 8, oy - 6);
+    
+    // Sleep indicator
+    if (env.ecoSleeping) {
+      ctx.font = 'bold 11px "JetBrains Mono", monospace';
+      ctx.fillStyle = '#A78BFA';
+      const sleepLabel = '💤 Slaapt...';
+      ctx.fillText(sleepLabel, ox + size - 100, oy - 6);
+    }
+    
+    // Memory info (bottom-right)
+    const memLong = env.ecoMemoryLong ?? [];
+    const memShort = env.ecoMemoryShort ?? [];
+    const knowledgeCount = memLong.filter(v => v !== 0).length;
+    const shortCount = memShort.filter(v => v !== 0).length;
+    ctx.font = '10px "JetBrains Mono", monospace';
+    ctx.fillStyle = '#64748B';
+    const memLabel = `🧠 Kort: ${shortCount}/8 Lang: ${knowledgeCount}/8`;
+    ctx.fillText(memLabel, ox + size - 80, oy + size + 14);
+    
+    // Days lived
+    if (env.ecoDaysLived !== undefined && env.ecoDaysLived > 0) {
+      ctx.fillStyle = '#94A3B8';
+      ctx.fillText(`Dag ${env.ecoDaysLived}`, ox + size - 80, oy + size + 26);
     }
   }, [env]);
 
@@ -251,6 +309,17 @@ export const EcosystemCanvas: React.FC<EcosystemCanvasProps> = ({ env }) => {
           <span className="text-emerald-400">Energie {Math.round(env.energy)}%</span>
           <span className="text-amber-400">Bronnen {env.ecoNodesCollected ?? 0}</span>
           <span className="text-rose-400">Storing {env.ecoHazardHits ?? 0}</span>
+          <span className="text-yellow-400">Ritme {env.ecoRhythmHits ?? 0}✓</span>
+          {env.ecoDayPhase !== undefined && (
+            <span className={(env.ecoDayPhase === 4 ? 'text-indigo-400' : 'text-orange-400')}>
+              {DAY_PHASES[env.ecoDayPhase] || DAY_PHASES[0]}
+            </span>
+          )}
+          {env.ecoSleeping && <span className="text-purple-400">💤 Slaapt</span>}
+          <span className="text-cyan-400">🧠 {env.ecoMemoryLong?.filter(v => v !== 0).length ?? 0} kennis</span>
+          {env.ecoDaysLived !== undefined && env.ecoDaysLived > 0 && (
+            <span className="text-slate-400">Dag {env.ecoDaysLived}</span>
+          )}
           {env.ecoZoneScores && (
             <>
               <span className="text-blue-400">Huisje {env.ecoZoneScores[0].toFixed(0)}</span>
